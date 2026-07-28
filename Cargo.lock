@@ -5301,6 +5301,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_cbor",
+ "serde_json",
  "zip",
 ]
 

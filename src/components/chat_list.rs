@@ -1,4 +1,4 @@
-use crate::storage::ChatStorage;
+use crate::storage::{ChatStorage, config::Config};
 use dioxus::prelude::*;
 use rfd::AsyncFileDialog;
 
@@ -20,13 +20,16 @@ async fn get_chat_list() -> Result<Vec<String>, String> {
 
 #[component]
 pub fn ChatList() -> Element {
-    let _nav = use_navigator();
+    let nav = use_navigator();
     let refresh = use_signal(|| 0u32);
     use_context_provider(|| refresh);
     let chat_list = use_resource(move || {
         let _ = refresh();
         get_chat_list()
     });
+    let config = use_context::<Signal<Config>>();
+    let has_chats = chat_list.read().as_ref().and_then(|r| r.as_ref().ok()).map(|c| !c.is_empty()).unwrap_or(false);
+    let show_name_prompt = has_chats && config.read().user_name.is_none();
 
     let list_content: Element = match &*chat_list.read() {
         Some(Ok(chats)) if chats.is_empty() => {
@@ -65,6 +68,17 @@ pub fn ChatList() -> Element {
     rsx! {
         div { class: "flex flex-col h-full bg-white",
             Header {}
+            if show_name_prompt {
+                div { class: "bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-xs text-yellow-800 flex items-center gap-1.5",
+                    span { "\u{26A0}\u{FE0F} Set your name in" }
+                    button {
+                        class: "underline font-medium hover:text-yellow-900",
+                        onclick: move |_| { nav.push("/settings"); },
+                        "Settings"
+                    }
+                    span { "to identify your messages" }
+                }
+            }
             div { class: "flex-1 overflow-y-auto",
                 {list_content}
             }
@@ -76,69 +90,94 @@ pub fn ChatList() -> Element {
 fn Header() -> Element {
     let refresh = use_context::<Signal<u32>>();
     let mut status = use_signal(|| String::new());
+    let nav = use_navigator();
 
     rsx! {
         div { class: "sticky top-0 z-10 bg-green-600 text-white px-4 py-3 flex items-center justify-between shadow-md",
             h1 { class: "text-xl font-bold", "WACV" }
-            button {
-                class: "flex items-center gap-1.5 px-3 py-1.5 bg-white text-green-700 rounded-full text-sm font-medium hover:bg-green-50 transition-colors shadow-sm",
-                onclick: move |_| {
-                    eprintln!("[WACV] Import clicked");
-                    status.set("Opening dialog...".to_string());
-                    let mut s = status.clone();
-                    let mut r = refresh.clone();
-                    spawn(async move {
-                        let file = pick_file_dialog().await;
-                        eprintln!("[WACV] pick_file returned: {:?}", file);
-                        if let Some(path) = file {
-                            eprintln!("[WACV] File: {:?}", path);
-                            s.set(format!("Loading {}", path.display()));
-                            match std::fs::read(&path) {
-                                Ok(data) => {
-                                    eprintln!("[WACV] Read {}B", data.len());
-                                    let fname = path.file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("chat.zip")
-                                        .to_string();
-                                    match ChatStorage::new() {
-                                        Ok(storage) => match storage.import_chat(&data, &fname) {
-                                            Ok(name) => {
-                                                eprintln!("[WACV] Imported: {}", name);
-                                                s.set(format!("\u{2713} {} imported", name));
-                                                *r.write() += 1;
-                                            }
+            div { class: "flex items-center gap-2",
+                button {
+                    class: "flex items-center gap-1.5 px-3 py-1.5 bg-white text-green-700 rounded-full text-sm font-medium hover:bg-green-50 transition-colors shadow-sm",
+                    onclick: move |_| {
+                        eprintln!("[WACV] Import clicked");
+                        status.set("Opening dialog...".to_string());
+                        let mut s = status.clone();
+                        let mut r = refresh.clone();
+                        spawn(async move {
+                            let file = pick_file_dialog().await;
+                            eprintln!("[WACV] pick_file returned: {:?}", file);
+                            if let Some(path) = file {
+                                eprintln!("[WACV] File: {:?}", path);
+                                s.set(format!("Loading {}", path.display()));
+                                match std::fs::read(&path) {
+                                    Ok(data) => {
+                                        eprintln!("[WACV] Read {}B", data.len());
+                                        let fname = path.file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("chat.zip")
+                                            .to_string();
+                                        match ChatStorage::new() {
+                                            Ok(storage) => match storage.import_chat(&data, &fname) {
+                                                Ok(name) => {
+                                                    eprintln!("[WACV] Imported: {}", name);
+                                                    s.set(format!("\u{2713} {} imported", name));
+                                                    *r.write() += 1;
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[WACV] Import err: {}", e);
+                                                    s.set(format!("Error: {}", e));
+                                                }
+                                            },
                                             Err(e) => {
-                                                eprintln!("[WACV] Import err: {}", e);
-                                                s.set(format!("Error: {}", e));
+                                                eprintln!("[WACV] Storage err: {}", e);
+                                                s.set(format!("Storage: {}", e));
                                             }
-                                        },
-                                        Err(e) => {
-                                            eprintln!("[WACV] Storage err: {}", e);
-                                            s.set(format!("Storage: {}", e));
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    eprintln!("[WACV] Read err: {}", e);
-                                    s.set(format!("Read err: {}", e));
+                                    Err(e) => {
+                                        eprintln!("[WACV] Read err: {}", e);
+                                        s.set(format!("Read err: {}", e));
+                                    }
                                 }
                             }
+                        });
+                    },
+                    svg {
+                        class: "w-4 h-4",
+                        fill: "none",
+                        view_box: "0 0 24 24",
+                        stroke: "currentColor",
+                        stroke_width: "2",
+                        path {
+                            d: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round"
                         }
-                    });
-                },
-                svg {
-                    class: "w-4 h-4",
-                    fill: "none",
-                    view_box: "0 0 24 24",
-                    stroke: "currentColor",
-                    stroke_width: "2",
-                    path {
-                        d: "M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12",
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round"
+                    }
+                    "Import"
+                }
+                // Settings gear
+                button {
+                    class: "p-2 rounded-full hover:bg-green-500 transition-colors",
+                    onclick: move |_| { nav.push("/settings"); },
+                    svg {
+                        class: "w-5 h-5",
+                        fill: "none",
+                        view_box: "0 0 24 24",
+                        stroke: "currentColor",
+                        stroke_width: "2",
+                        path {
+                            d: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                        }
+                        path {
+                            d: "M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                        }
                     }
                 }
-                "Import"
             }
         }
         if !status().is_empty() {

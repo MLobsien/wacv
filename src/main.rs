@@ -10,6 +10,8 @@ mod storage;
 
 use components::ChatList;
 use components::ChatView;
+use crate::storage::config::Config;
+use components::Settings;
 
 const MAIN_CSS: &str = include_str!("../assets/main.css");
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
@@ -194,9 +196,14 @@ enum Route {
     ChatList {},
     #[route("/chat/:name")]
     ChatView { name: String },
+    #[route("/settings")]
+    Settings {},
 }
 
 fn App() -> Element {
+    let config = use_signal(|| Config::load());
+    use_context_provider(|| config);
+
     rsx! {
         style { "{TAILWIND_CSS}" }
         style { "{MAIN_CSS}" }
@@ -205,3 +212,4 @@ fn App() -> Element {
         }
     }
 }
+

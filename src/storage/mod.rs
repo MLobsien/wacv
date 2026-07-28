@@ -1,3 +1,4 @@
+pub mod config;
 pub mod chat;
 pub mod fs;
 pub mod parser;

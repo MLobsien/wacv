@@ -1,3 +1,5 @@
+pub use settings::Settings;
+mod settings;
 mod chat_list;
 mod chat_view;
 mod hero;

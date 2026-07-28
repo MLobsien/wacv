@@ -1,4 +1,5 @@
 use crate::storage::{CallInfo, CallKind, ChatStorage, MessageKind};
+use crate::storage::config::Config;
 use chrono::{DateTime, Local};
 use dioxus::prelude::*;
 
@@ -10,6 +11,7 @@ pub fn ChatView(name: String) -> Element {
         let n = decoded_name();
         async move { ChatStorage::new().ok().and_then(|s| s.load_chat(&n).ok()) }
     });
+    let config = use_context::<Signal<Config>>();
 
     // Compute header content outside rsx!
     let header_content: Element = match &*chat.read() {
@@ -46,7 +48,7 @@ pub fn ChatView(name: String) -> Element {
             let mut last_sender: Option<String> = None;
             let mut last_ts: i64 = 0;
             let mut items: Vec<Element> = Vec::new();
-            let my_name = c.my_name();
+            let my_name = config.read().user_name.clone().or_else(|| c.my_name());
 
             for (i, msg) in c.messages.iter().enumerate() {
                 // Show date separator if new day
