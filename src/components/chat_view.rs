@@ -1,0 +1,473 @@
+use crate::storage::{CallInfo, CallKind, ChatStorage, MessageKind};
+use chrono::{DateTime, Local};
+use dioxus::prelude::*;
+
+#[component]
+pub fn ChatView(name: String) -> Element {
+    let nav = use_navigator();
+    let decoded_name = use_memo(move || url_decode(&name));
+    let chat = use_resource(move || {
+        let n = decoded_name();
+        async move { ChatStorage::new().ok().and_then(|s| s.load_chat(&n).ok()) }
+    });
+
+    // Compute header content outside rsx!
+    let header_content: Element = match &*chat.read() {
+        Some(Some(c)) => {
+            rsx! {
+                div { class: "flex items-center gap-2",
+                    div { class: "w-9 h-9 rounded-full bg-green-400 flex items-center justify-center text-white font-bold text-sm shrink-0",
+                        {c.display_name().chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or("?".to_string())}
+                    }
+                    div {
+                        h2 { class: "font-semibold text-sm leading-tight", "{c.display_name()}" }
+                        p { class: "text-xs text-green-200", "WhatsApp Chat" }
+                    }
+                }
+            }
+        }
+        Some(None) => rsx! {
+            div { class: "text-white", "Chat not found" }
+        },
+        None => rsx! {
+            div { class: "flex items-center gap-2",
+                div { class: "w-9 h-9 rounded-full bg-green-400 animate-pulse" }
+                div {
+                    div { class: "h-4 w-24 bg-green-500 rounded animate-pulse" }
+                    div { class: "h-3 w-16 bg-green-500 rounded mt-1 animate-pulse" }
+                }
+            }
+        },
+    };
+
+    // Compute messages content outside rsx!
+    let messages_content: Element = match &*chat.read() {
+        Some(Some(c)) => {
+            let mut last_sender: Option<String> = None;
+            let mut last_ts: i64 = 0;
+            let mut items: Vec<Element> = Vec::new();
+            let my_name = c.my_name();
+
+            for (i, msg) in c.messages.iter().enumerate() {
+                // Show date separator if new day
+                let show_date = if i > 0 {
+                    day_changed(c.messages[i - 1].timestamp, msg.timestamp)
+                } else {
+                    true
+                };
+
+                if show_date {
+                    items.push(rsx! {
+                        DateSeparator { date: format_date(msg.timestamp) }
+                    });
+                }
+
+                // Show sender name for group chats
+                let show_sender = msg.sender.as_deref() != last_sender.as_deref()
+                    || msg.timestamp - last_ts > 300;
+
+                last_sender = msg.sender.clone();
+                last_ts = msg.timestamp;
+
+                match &msg.kind {
+                    MessageKind::System(text) => {
+                        items.push(rsx! {
+                            SystemMessage { text: text.clone() }
+                        });
+                    }
+                    MessageKind::EncryptionNotice => {
+                        // Hide encryption notice - it's in every chat
+                    }
+                    MessageKind::Text { content, edited } => {
+                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        let time = format_msg_time(msg.timestamp);
+                        let sender = show_sender.then(|| msg.sender.clone()).flatten();
+                        items.push(rsx! {
+                            MessageBubble {
+                                is_mine,
+                                sender,
+                                content: content.clone(),
+                                edited: *edited,
+                                time,
+                            }
+                        });
+                    }
+                    MessageKind::Call(call) => {
+                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        items.push(rsx! {
+                            CallCard {
+                                is_mine,
+                                sender: msg.sender.clone().unwrap_or_default(),
+                                info: call.clone(),
+                                time: format_msg_time(msg.timestamp),
+                            }
+                        });
+                    }
+                    MessageKind::Media { filename } => {
+                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        let file_chat_name = decoded_name();
+                        items.push(rsx! {
+                            MediaMessage {
+                                is_mine,
+                                chat_name: file_chat_name.clone(),
+                                filename: filename.clone(),
+                                time: format_msg_time(msg.timestamp),
+                            }
+                        });
+                    }
+                    MessageKind::Deleted { by_sender } => {
+                        let is_mine = *by_sender;
+                        items.push(rsx! {
+                            DeletedMessage { is_mine }
+                        });
+                    }
+                }
+            }
+
+            rsx! {
+                {items.into_iter()}
+            }
+        }
+        Some(None) => rsx! {
+            div { class: "flex items-center justify-center h-full text-gray-400",
+                "Chat could not be loaded"
+            }
+        },
+        None => rsx! {
+            div { class: "flex items-center justify-center h-full",
+                div { class: "animate-spin rounded-full h-8 w-8 border-b-2 border-green-500" }
+            }
+        },
+    };
+
+    rsx! {
+        div { class: "flex flex-col h-full bg-gray-100",
+            // Chat header
+            div { class: "sticky top-0 z-10 bg-green-600 text-white px-2 py-2 flex items-center gap-2 shadow-md",
+                button {
+                    class: "p-2 rounded-full hover:bg-green-500 transition-colors",
+                    onclick: move |_| nav.go_back(),
+                    svg {
+                        class: "w-6 h-6",
+                        fill: "none",
+                        view_box: "0 0 24 24",
+                        stroke: "currentColor",
+                        stroke_width: "2",
+                        path {
+                            d: "M15 18l-6-6 6-6",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                        }
+                    }
+                }
+                {header_content}
+            }
+
+            // Messages area
+            div { class: "flex-1 overflow-y-auto px-3 py-2",
+                {messages_content}
+            }
+        }
+    }
+}
+
+/// Show a date separator line (like "Today", "Yesterday", or date)
+#[component]
+fn DateSeparator(date: String) -> Element {
+    rsx! {
+        div { class: "flex justify-center my-2",
+            span { class: "text-xs text-gray-500 bg-white/80 px-2 py-1 rounded shadow-sm", "{date}" }
+        }
+    }
+}
+
+/// System message (centered, small)
+#[component]
+fn SystemMessage(text: String) -> Element {
+    rsx! {
+        div { class: "flex justify-center my-2",
+            span { class: "text-xs text-gray-500 italic bg-white/60 px-3 py-1.5 rounded-lg max-w-xs text-center leading-relaxed",
+                "{text}"
+            }
+        }
+    }
+}
+
+/// Regular message bubble
+#[component]
+fn MessageBubble(
+    is_mine: bool,
+    sender: Option<String>,
+    content: String,
+    edited: bool,
+    time: String,
+) -> Element {
+    let bubble_class = if is_mine {
+        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end"
+    } else {
+        "bg-white rounded-[0_8px_8px_8px] self-start"
+    };
+
+    let container_class = if is_mine { "items-end" } else { "items-start" };
+
+    rsx! {
+        div { class: "flex flex-col {container_class} mb-1.5",
+            // Sender name (for group chats, other people)
+            if let Some(s) = sender {
+                span { class: "text-xs text-gray-500 ml-1 mb-0.5 font-medium", "{s}" }
+            }
+
+            div { class: "max-w-[75%] shadow-sm {bubble_class} px-3 py-1.5",
+                // Message content - render newlines as <br>
+                div { class: "text-sm text-gray-900 whitespace-pre-wrap break-words",
+                    "{content}"
+                }
+                // Footer: edited badge + time
+                div { class: "flex items-center justify-end gap-1 mt-0.5",
+                    if edited {
+                        span { class: "text-[10px] text-gray-400 italic", "edited" }
+                    }
+                    span { class: "text-[10px] text-gray-400", "{time}" }
+                    if is_mine {
+                        // Double check mark
+                        svg {
+                            class: "w-3.5 h-3.5 text-blue-500",
+                            view_box: "0 0 16 11",
+                            fill: "currentColor",
+                            path { d: "M11.071.653a.457.457 0 00-.304-.102.493.493 0 00-.381.178l-6.19 7.636-2.011-2.095a.463.463 0 00-.336-.153.457.457 0 00-.335.128.51.51 0 00-.14.32.484.484 0 00.14.345l2.394 2.493a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
+                            path { d: "M14.931.653a.457.457 0 00-.305-.102.493.493 0 00-.381.178l-6.19 7.636-1.058-1.102a.442.442 0 00-.121-.099.538.538 0 00-.079-.035.398.398 0 00-.286.019.47.47 0 00-.184.145.47.47 0 00-.098.185.475.475 0 00.01.216.44.44 0 00.074.153l1.441 1.502a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Call information card
+#[component]
+fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Element {
+    let container_class = if is_mine { "items-end" } else { "items-start" };
+    let text_color = if is_mine {
+        "text-green-700"
+    } else {
+        "text-red-500"
+    };
+
+    let call_label = match info.kind {
+        CallKind::Missed => {
+            if is_mine {
+                "Outgoing call"
+            } else {
+                "Missed call"
+            }
+        }
+        CallKind::Outgoing => "Outgoing call",
+        CallKind::Incoming => "Incoming call",
+    };
+
+    let duration_text = info
+        .duration_secs
+        .map(|s| {
+            if s >= 60 {
+                format!("{} min", s / 60)
+            } else {
+                format!("{} sec", s)
+            }
+        })
+        .unwrap_or_default();
+
+    rsx! {
+        div { class: "flex flex-col {container_class} mb-1.5",
+            div { class: "max-w-[75%] bg-white rounded-lg shadow-sm px-4 py-2 flex items-center gap-3",
+                // Phone icon
+                svg {
+                    class: "w-5 h-5 shrink-0 {text_color}",
+                    fill: "none",
+                    view_box: "0 0 24 24",
+                    stroke: "currentColor",
+                    stroke_width: "2",
+                    path {
+                        d: "M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z",
+                        stroke_linecap: "round",
+                        stroke_linejoin: "round",
+                    }
+                }
+                div {
+                    p { class: "text-sm font-medium text-gray-900", "{call_label}" }
+                    if !duration_text.is_empty() {
+                        p { class: "text-xs text-gray-500", "{duration_text}" }
+                    }
+                }
+                span { class: "text-[10px] text-gray-400 ml-auto shrink-0", "{time}" }
+            }
+        }
+    }
+}
+
+/// Media message (image, video, audio, sticker)
+#[component]
+fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String) -> Element {
+    let bubble_class = if is_mine {
+        "bg-green-200 rounded-[8px_0_8px_8px] self-end shadow-sm"
+    } else {
+        "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
+    };
+    let container_class = if is_mine { "items-end" } else { "items-start" };
+
+    let port = crate::media_port();
+    let media_uri = format!("http://127.0.0.1:{}/{}/{}", port, crate::url_encode(&chat_name), crate::url_encode(&filename));
+    let is_image = filename.contains("PHOTO")
+        || filename.contains("IMAGE")
+        || filename.contains(".jpg")
+        || filename.contains(".png")
+        || filename.contains(".webp");
+    let is_video = filename.contains("VIDEO") || filename.contains(".mp4");
+    let is_audio =
+        filename.contains("AUDIO") || filename.contains(".opus") || filename.contains(".ogg");
+    let is_sticker = filename.contains("STICKER");
+    let audio_bg = if is_mine { "bg-green-100" } else { "bg-gray-50" };
+
+    rsx! {
+        div { class: "flex flex-col {container_class} mb-1.5",
+            div { class: "max-w-[75%] overflow-hidden {bubble_class}",
+                if is_sticker {
+                    img {
+                        src: "{media_uri}",
+                        class: "w-32 h-32 object-contain",
+                        alt: "",
+                    }
+                    div { class: "px-2 py-1 flex justify-end",
+                        span { class: "text-[10px] text-gray-400", "{time}" }
+                    }
+                } else if is_image {
+                    div { class: "p-1",
+                        img {
+                            src: "{media_uri}",
+                            class: "max-w-[50vw] max-h-[50vh] w-auto h-auto object-contain",
+                            alt: "",
+                        }
+                    }
+                    div { class: "px-2 py-1 flex justify-end",
+                        span { class: "text-[10px] text-gray-400", "{time}" }
+                    }
+                } else if is_video {
+                    div { class: "p-1",
+                        video {
+                            src: "{media_uri}",
+                            controls: true,
+                            class: "max-w-[50vw] max-h-[50vh] w-auto h-auto",
+                        }
+                    }
+                    div { class: "px-2 py-1 flex justify-end",
+                        span { class: "text-[10px] text-gray-400", "{time}" }
+                    }
+                } else if is_audio {
+                    div { class: "flex items-center gap-2 px-3 py-2 min-w-[200px] {audio_bg}",
+                        audio {
+                            src: "{media_uri}",
+                            controls: true,
+                            class: "h-8 accent-green-600",
+                        }
+                        span { class: "text-[10px] text-gray-400 shrink-0", "{time}" }
+                    }
+                } else {
+                    // Generic document
+                    div { class: "flex items-center gap-2 px-3 py-2",
+                        svg { class: "w-8 h-8 text-gray-400 shrink-0", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", stroke_width: "2",
+                            path { d: "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" }
+                        }
+                        div { class: "min-w-0",
+                            p { class: "text-xs text-gray-600 truncate", "{filename}" }
+                            span { class: "text-[10px] text-gray-400", "{time}" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Deleted message placeholder
+#[component]
+fn DeletedMessage(is_mine: bool) -> Element {
+    let container_class = if is_mine { "items-end" } else { "items-start" };
+    let text = if is_mine {
+        "You deleted this message"
+    } else {
+        "This message was deleted"
+    };
+
+    rsx! {
+        div { class: "flex flex-col {container_class} mb-1.5",
+            div { class: "max-w-[75%] bg-gray-100 rounded-lg px-3 py-2 italic text-gray-400 text-sm border border-gray-200",
+                svg {
+                    class: "w-3.5 h-3.5 inline mr-1 -mt-0.5",
+                    fill: "none",
+                    view_box: "0 0 24 24",
+                    stroke: "currentColor",
+                    stroke_width: "2",
+                    path {
+                        d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
+                        stroke_linecap: "round", stroke_linejoin: "round",
+                    }
+                }
+                "{text}"
+            }
+        }
+    }
+}
+
+// --- Helper functions ---
+
+fn format_msg_time(ts: i64) -> String {
+    DateTime::from_timestamp(ts, 0)
+        .map(|dt| dt.with_timezone(&Local).format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+fn format_date(ts: i64) -> String {
+    let now = Local::now();
+    let dt = DateTime::from_timestamp(ts, 0).map(|dt| dt.with_timezone(&Local));
+
+    match dt {
+        Some(dt) => {
+            if dt.date_naive() == now.date_naive() {
+                "Today".to_string()
+            } else if dt.date_naive() == (now - chrono::Duration::days(1)).date_naive() {
+                "Yesterday".to_string()
+            } else {
+                dt.format("%d.%m.%Y").to_string()
+            }
+        }
+        None => String::new(),
+    }
+}
+
+fn day_changed(prev: i64, current: i64) -> bool {
+    let prev_dt = DateTime::from_timestamp(prev, 0).map(|dt| dt.with_timezone(&Local).date_naive());
+    let curr_dt =
+        DateTime::from_timestamp(current, 0).map(|dt| dt.with_timezone(&Local).date_naive());
+
+    match (prev_dt, curr_dt) {
+        (Some(p), Some(c)) => p != c,
+        _ => false,
+    }
+}
+
+fn url_decode(s: &str) -> String {
+    // Simple percent-decoding for chat names
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                result.push(byte as char);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}

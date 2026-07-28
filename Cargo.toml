@@ -4,13 +4,22 @@ version = "0.1.0"
 authors = ["mlobsien <mlobsien@gmx.de>"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-dioxus = { version = "0.7.1", features = [] }
+dioxus = { version = "0.7.1", features = ["router"] }
+zip = "7.0.0"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+jni = "0.21.0"
+anyhow = "1.0.100"
+serde_cbor = "0.11.2"
+serde = { version = "1.0.228", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+dirs = "6"
 
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal"] }
 [features]
-default = ["mobile"]
+default = ["desktop"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]

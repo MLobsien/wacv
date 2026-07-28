@@ -19,3 +19,6 @@ script = []
 # Javascript code file
 # serve: [dev-server] only
 script = []
+
+[[platform.android]]
+targets = ["aarch64-linux-android", "armv7-linux-androideabi"]

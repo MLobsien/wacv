@@ -1,4 +1,7 @@
+mod chat_list;
+mod chat_view;
 mod hero;
-pub use hero::Hero;
-mod chat;
-pub use chat::Chat;
+
+pub use chat_list::ChatList;
+pub use chat_view::ChatView;
+
