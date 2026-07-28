@@ -79,6 +79,9 @@ impl Message {
             }
             MessageKind::Deleted { .. } => "This message was deleted",
             MessageKind::EncryptionNotice => "",
+            MessageKind::Voting { question, .. } => {
+                if question.is_empty() { "Poll" } else { question.as_str() }
+            }
         }
     }
 }
@@ -97,6 +100,14 @@ pub enum MessageKind {
     Deleted { by_sender: bool },
     /// Encryption notice (first message in every chat)
     EncryptionNotice,
+    /// Voting/poll message with question and options
+    Voting { question: String, options: Vec<VoteOption> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VoteOption {
+    pub text: String,
+    pub votes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

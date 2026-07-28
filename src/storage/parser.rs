@@ -2,10 +2,9 @@ use crate::storage::chat::*;
 use chrono::NaiveDateTime;
 use regex::Regex;
 
-
 const LRM: char = '\u{200e}';
 
-/// Parse the _chat.txt content from a WhatsApp export zip
+/// Parse the _chat.txt content from a WhatsApp export
 pub fn parse_chat(content: &str) -> Vec<Message> {
     let line_re = Regex::new(
         r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): (.*)$",
@@ -113,7 +112,6 @@ fn parse_timestamp(ts: &str) -> Option<i64> {
 
     let _formatted = format!("{:04}-{:02}-{} {} {}", year_full, month.parse::<i32>().unwrap_or(0), day, time, "00");
     // Actually simpler: just parse DD.MM.YY HH:MM:SS directly with custom parsing
-    // Actually simpler: just parse DD.MM.YY HH:MM:SS directly with custom parsing
     let naive = NaiveDateTime::parse_from_str(
         &format!("{:02}.{:02}.{:04} {}", 
             day.parse::<u32>().unwrap_or(1),
@@ -142,10 +140,6 @@ fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
         return Some(MessageKind::EncryptionNotice);
     }
 
-    // System message: sender says something that starts with LRM in the text
-    // But NOT if it's media or edited
-    let _after_lrm = text.trim_start_matches(LRM);
-
     // Media attachment: <Anhang: ...> or <Attachment: ...>
     if let Some(filename) = extract_media_filename(text) {
         return Some(MessageKind::Media { filename });
@@ -154,6 +148,12 @@ fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
     // Check for call messages (language-specific)
     if let Some(call) = detect_call(text_clean) {
         return Some(MessageKind::Call(call));
+    }
+
+    // Voting/poll message: lines starting with LRM + OPTION:
+    if detect_voting(text) {
+        let (question, options) = parse_voting(text);
+        return Some(MessageKind::Voting { question, options });
     }
 
     // Check for system messages: text starts with LRM
@@ -281,6 +281,71 @@ fn strip_edited_suffix(text: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Detect if the message is a voting/poll (contains LRM + OPTION: lines).
+fn detect_voting(text: &str) -> bool {
+    text.lines().any(|line| line.contains('\u{200e}') && line.trim().contains("OPTION:"))
+}
+
+/// Parse a voting message into question and options.
+///
+/// Input format (language-specific):
+///   ABSTIMMUNG: Question?
+///   LRM + OPTION: Option text (5 Stimmen)
+///   LRM + OPTION: Option text (1 Stimme)
+///
+/// English variant:
+///   POLL: Question?
+///   LRM + OPTION: Option text (5 votes)
+///   LRM + OPTION: Option text (1 vote)
+fn parse_voting(text: &str) -> (String, Vec<VoteOption>) {
+    let mut question = String::new();
+    let mut options = Vec::new();
+    let mut in_options = false;
+
+    // Match OPTION lines: LRM + OPTION: text (N words)
+    // Where "words" is any language variant (votes, Stimmen, vote, Stimme, etc.)
+    let option_re = Regex::new(
+        r"^\u{200e}OPTION:\s*(.*?)\s*\((\d+)\s*\S+\)\s*$"
+    ).expect("invalid option regex");
+
+    for line in text.lines() {
+        if line.trim().contains('\u{200e}') && line.trim().contains("OPTION:") {
+            in_options = true;
+            if let Some(caps) = option_re.captures(line.trim()) {
+                options.push(VoteOption {
+                    text: caps[1].to_string(),
+                    votes: caps[2].parse().unwrap_or(0),
+                });
+            } else {
+                // Fallback: everything after "OPTION: " prefix
+                if let Some(idx) = line.trim().find("OPTION:") {
+                    let after = line.trim()[idx + "OPTION:".len()..].trim().to_string();
+                    options.push(VoteOption { text: after, votes: 0 });
+                }
+            }
+        } else if !in_options {
+            let cleaned = line.trim_start_matches(LRM).trim();
+            if !cleaned.is_empty() {
+                // Strip language-specific poll prefix
+                let cleaned = cleaned
+                    .strip_prefix("ABSTIMMUNG:")
+                    .or_else(|| cleaned.strip_prefix("POLL:"))
+                    .unwrap_or(cleaned)
+                    .trim()
+                    .to_string();
+                if !cleaned.is_empty() {
+                    if !question.is_empty() {
+                        question.push('\n');
+                    }
+                    question.push_str(&cleaned);
+                }
+            }
+        }
+    }
+
+    (question, options)
 }
 
 /// Parse the chat name from a zip filename like "WhatsApp Chat - Alice.zip"
@@ -415,4 +480,78 @@ mod tests {
             assert!(content.contains("step n"));
         }
     }
+
+    #[test]
+    fn test_parse_voting_german() {
+        let input = "[15.06.25, 10:30:00] Alice: ABSTIMMUNG: What is your favorite color?
+\u{200e}OPTION: Red (5 Stimmen)
+\u{200e}OPTION: Blue (3 Stimmen)
+\u{200e}OPTION: Green (1 Stimme)";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
+        assert_eq!(messages[0].sender.as_deref(), Some("Alice"));
+        if let MessageKind::Voting { question, options } = &messages[0].kind {
+            assert_eq!(question, "What is your favorite color?");
+            assert_eq!(options.len(), 3);
+            assert_eq!(options[0].text, "Red");
+            assert_eq!(options[0].votes, 5);
+            assert_eq!(options[1].text, "Blue");
+            assert_eq!(options[1].votes, 3);
+            assert_eq!(options[2].text, "Green");
+            assert_eq!(options[2].votes, 1);
+        }
+    }
+
+    #[test]
+    fn test_parse_voting_english() {
+        let input = "[15.06.25, 11:00:00] Bob: POLL: Best day?
+\u{200e}OPTION: Monday (10 votes)
+\u{200e}OPTION: Tuesday (2 votes)";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        if let MessageKind::Voting { question, options } = &messages[0].kind {
+            assert_eq!(question, "Best day?");
+            assert_eq!(options.len(), 2);
+            assert_eq!(options[0].text, "Monday");
+            assert_eq!(options[0].votes, 10);
+            assert_eq!(options[1].text, "Tuesday");
+            assert_eq!(options[1].votes, 2);
+        }
+    }
+
+    #[test]
+    fn test_parse_voting_preview() {
+        let msg = Message {
+            timestamp: 0,
+            sender: Some("Alice".to_string()),
+            kind: MessageKind::Voting {
+                question: "Best option?".to_string(),
+                options: vec![
+                    VoteOption { text: "A".to_string(), votes: 10 },
+                    VoteOption { text: "B".to_string(), votes: 5 },
+                ],
+            },
+        };
+        assert_eq!(msg.preview_text(), "Best option?");
+    }
 }
+
+    #[test]
+    fn test_parse_voting_question_on_separate_line() {
+        // Real format from 11t chat: ABSTIMMUNG: on its own line,
+        // question on next line
+        let input = "[14.06.25, 23:29:09] ~ Elias: ‎ABSTIMMUNG:\nElias?\n\u{200e}OPTION: Ja (1 Stimme)\n\u{200e}OPTION: Nein (7 Stimmen)";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
+        assert_eq!(messages[0].sender.as_deref(), Some("~ Elias"));
+        if let MessageKind::Voting { question, options } = &messages[0].kind {
+            assert_eq!(question, "Elias?");
+            assert_eq!(options.len(), 2);
+            assert_eq!(options[0].text, "Ja");
+            assert_eq!(options[0].votes, 1);
+            assert_eq!(options[1].text, "Nein");
+            assert_eq!(options[1].votes, 7);
+        }
+    }
