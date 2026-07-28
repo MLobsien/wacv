@@ -1,4 +1,4 @@
-use crate::storage::{CallInfo, CallKind, ChatStorage, MessageKind};
+use crate::storage::{CallInfo, CallKind, ChatStorage, MessageKind, VoteOption};
 use crate::storage::config::Config;
 use chrono::{DateTime, Local};
 use dioxus::prelude::*;
@@ -121,6 +121,17 @@ pub fn ChatView(name: String) -> Element {
                         let is_mine = *by_sender;
                         items.push(rsx! {
                             DeletedMessage { is_mine }
+                        });
+                    }
+                    MessageKind::Voting { question, options } => {
+                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        items.push(rsx! {
+                            VotingMessage {
+                                is_mine,
+                                question: question.clone(),
+                                options: options.clone(),
+                                time: format_msg_time(msg.timestamp),
+                            }
                         });
                     }
                 }
@@ -472,4 +483,45 @@ fn url_decode(s: &str) -> String {
         }
     }
     result
+}
+
+/// Voting/poll message display
+#[component]
+fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time: String) -> Element {
+    let container_class = if is_mine { "items-end" } else { "items-start" };
+    let bubble_class = if is_mine {
+        "bg-green-200 rounded-[8px_0_8px_8px] self-end"
+    } else {
+        "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
+    };
+
+    let total: u32 = options.iter().map(|o| o.votes).sum();
+    rsx! {
+        div { class: "flex flex-col {container_class} mb-1.5",
+            div { class: "max-w-[75%] overflow-hidden {bubble_class}",
+                div { class: "px-3 py-2",
+                    p { class: "text-sm font-semibold text-gray-900 mb-2", "{question}" }
+                    {options.iter().map(|opt| {
+                        let pct = if total > 0 { (opt.votes as f64 / total as f64) * 100.0 } else { 0.0 };
+                        let vote_label = if opt.votes == 1 { "vote" } else { "votes" };
+                        rsx! {
+                            div { class: "flex items-center py-0.5 gap-1",
+                                svg { class: "w-4 h-4 shrink-0 text-gray-400", view_box: "0 0 16 16",
+                                    circle { cx: "8", cy: "8", r: "6", fill: "none", stroke: "currentColor", stroke_width: "2" }
+                                }
+                                span { class: "text-sm text-gray-700 truncate w-24 shrink-0", "{opt.text}" }
+                                div { class: "w-40 h-3 rounded-full overflow-hidden bg-gray-400 shrink-0",
+                                    div { class: "h-full rounded-full bg-blue-500", style: "width: {pct}%" }
+                                }
+                                span { class: "text-xs text-gray-400 font-medium shrink-0 w-12 text-right ml-1", "{opt.votes} {vote_label}" }
+                            }
+                        }
+                    })}
+                }
+                div { class: "px-3 py-1 flex justify-end border-t border-gray-100",
+                    span { class: "text-[10px] text-gray-400", "{time}" }
+                }
+            }
+        }
+    }
 }
