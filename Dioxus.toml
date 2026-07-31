@@ -21,4 +21,4 @@ script = []
 script = []
 
 [[platform.android]]
-targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
+targets = ["aarch64-linux-android"]
