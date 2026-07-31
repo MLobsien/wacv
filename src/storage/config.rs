@@ -10,12 +10,18 @@ pub struct Config {
 }
 
 impl Config {
-    /// Path to the config file: `$XDG_CONFIG_HOME/wacv/config.json`
+    /// Path to the config file.
+    /// On Android, uses `getFilesDir() / "wacv/config.json"`.
+    /// On desktop, uses `$XDG_CONFIG_HOME/wacv/config.json`.
     pub fn path() -> PathBuf {
+        #[cfg(target_os = "android")]
+        if let Some(dir) = crate::android::android_data_dir() {
+            return dir.join("wacv").join("config.json");
+        }
         dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("wacv")
-            .join("config.json")
+.unwrap_or_else(|| PathBuf::from("."))
+.join("wacv")
+.join("config.json")
     }
 
     /// Load config from disk, returning defaults on error.
@@ -30,6 +36,7 @@ impl Config {
     /// Save config to disk, creating parent directories if needed.
     pub fn save(&self) {
         let path = Self::path();
+        eprintln!("[WACV] Config::save() to {path:?}");
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

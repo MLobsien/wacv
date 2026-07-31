@@ -62,7 +62,7 @@ pub fn parse_chat(content: &str) -> Vec<Message> {
                 timestamp,
                 sender: kind.as_ref().and_then(|k| match k {
                     MessageKind::System(_) | MessageKind::EncryptionNotice => None,
-                    _ => Some(sender.clone()),
+                    _ => Some(normalize_sender(&sender).to_string()),
                 }),
                 kind: kind.unwrap_or(MessageKind::Text {
                     content: text,
@@ -545,7 +545,7 @@ mod tests {
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
-        assert_eq!(messages[0].sender.as_deref(), Some("~ Elias"));
+        assert_eq!(messages[0].sender.as_deref(), Some("Elias"));
         if let MessageKind::Voting { question, options } = &messages[0].kind {
             assert_eq!(question, "Elias?");
             assert_eq!(options.len(), 2);

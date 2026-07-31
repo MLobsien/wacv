@@ -6,18 +6,19 @@ use std::{fs, io::Read};
 
 pub struct ChatStorage {
     data_dir: PathBuf,
-    cache_dir: PathBuf,
+    media_dir: PathBuf,
 }
 
 impl ChatStorage {
     pub fn new() -> Result<Self> {
         let data_dir = Self::get_data_dir()?;
-        let cache_dir = Self::get_cache_dir()?;
+        let media_dir = Self::get_media_dir()?;
         fs::create_dir_all(&data_dir).context("failed to create data dir")?;
-        fs::create_dir_all(&cache_dir).context("failed to create cache dir")?;
+        eprintln!("[WACV] ChatStorage::new() data={data_dir:?} media={media_dir:?}");
+        fs::create_dir_all(&media_dir).context("failed to create media dir")?;
         Ok(Self {
             data_dir,
-            cache_dir,
+            media_dir,
         })
     }
 
@@ -29,8 +30,8 @@ impl ChatStorage {
             .map_err(|e| anyhow::anyhow!("invalid zip: {}", e))?;
 
         // Extract media files
-        let chat_cache = self.cache_dir.join(&chat_name);
-        fs::create_dir_all(&chat_cache).context("failed to create chat cache dir")?;
+        let chat_media = self.media_dir.join(&chat_name);
+        fs::create_dir_all(&chat_media).context("failed to create chat media dir")?;
 
         let mut chat_text = String::new();
 
@@ -47,10 +48,7 @@ impl ChatStorage {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(&entry_name);
-                let media_path = chat_cache.join(basename);
-                if let Some(parent) = media_path.parent() {
-                    fs::create_dir_all(parent).ok();
-                }
+                let media_path = chat_media.join(basename);
                 let mut out = fs::File::create(&media_path)
                     .context(format!("failed to create media file: {}", entry_name))?;
                 std::io::copy(&mut file, &mut out)
@@ -119,23 +117,35 @@ impl ChatStorage {
         Ok(())
     }
 
-    /// Get the path to a cached media file for a chat
+    /// Get the path to a media file for a chat
     pub fn media_path(&self, chat_name: &str, filename: &str) -> PathBuf {
-        self.cache_dir.join(chat_name).join(filename)
+        self.media_dir.join(chat_name).join(filename)
     }
 
-    /// Check if media file exists in cache
+    /// Check if media file exists
     pub fn media_exists(&self, chat_name: &str, filename: &str) -> bool {
         self.media_path(chat_name, filename).exists()
     }
 
     fn get_data_dir() -> Result<PathBuf> {
+        #[cfg(target_os = "android")]
+        if let Some(dir) = crate::android::android_data_dir() {
+            eprintln!("[WACV] get_data_dir: android path={:?}", dir.join("wacv").join("chats"));
+            return Ok(dir.join("wacv").join("chats"));
+        }
         let base = dirs::data_dir().context("failed to get data dir")?;
+        eprintln!("[WACV] get_data_dir: desktop path={:?}", base.join("wacv").join("chats"));
         Ok(base.join("wacv").join("chats"))
     }
 
-    fn get_cache_dir() -> Result<PathBuf> {
-        let base = dirs::cache_dir().or_else(|| dirs::data_dir()).context("failed to get cache dir")?;
+    fn get_media_dir() -> Result<PathBuf> {
+        #[cfg(target_os = "android")]
+        if let Some(dir) = crate::android::android_data_dir() {
+            eprintln!("[WACV] get_media_dir: android path={:?}", dir.join("wacv").join("media"));
+            return Ok(dir.join("wacv").join("media"));
+        }
+        let base = dirs::data_dir().context("failed to get data dir")?;
+        eprintln!("[WACV] get_media_dir: desktop path={:?}", base.join("wacv").join("media"));
         Ok(base.join("wacv").join("media"))
     }
 }

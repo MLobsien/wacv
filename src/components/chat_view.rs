@@ -6,9 +6,11 @@ use dioxus::prelude::*;
 #[component]
 pub fn ChatView(name: String) -> Element {
     let nav = use_navigator();
-    let decoded_name = use_memo(move || url_decode(&name));
+    // `name` is already percent-decoded by the dioxus router (each route
+    // segment is decoded during FromStr parsing), so no manual decode here.
+    let media_chat_name = name.clone();
     let chat = use_resource(move || {
-        let n = decoded_name();
+        let n = name.clone();
         async move { ChatStorage::new().ok().and_then(|s| s.load_chat(&n).ok()) }
     });
     let config = use_context::<Signal<Config>>();
@@ -81,9 +83,14 @@ pub fn ChatView(name: String) -> Element {
                         // Hide encryption notice - it's in every chat
                     }
                     MessageKind::Text { content, edited } => {
-                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        let is_mine = my_name.as_deref().map_or(false, |my| {
+                            msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
+                        });
                         let time = format_msg_time(msg.timestamp);
-                        let sender = show_sender.then(|| msg.sender.clone()).flatten();
+                        let sender = show_sender
+                            .then(|| msg.sender.clone())
+                            .flatten()
+                            .map(|s| crate::storage::chat::normalize_sender(&s).to_string());
                         items.push(rsx! {
                             MessageBubble {
                                 is_mine,
@@ -95,19 +102,26 @@ pub fn ChatView(name: String) -> Element {
                         });
                     }
                     MessageKind::Call(call) => {
-                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        let is_mine = my_name.as_deref().map_or(false, |my| {
+                            msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
+                        });
                         items.push(rsx! {
                             CallCard {
                                 is_mine,
-                                sender: msg.sender.clone().unwrap_or_default(),
+                                sender: msg.sender
+                                    .clone()
+                                    .map(|s| crate::storage::chat::normalize_sender(&s).to_string())
+                                    .unwrap_or_default(),
                                 info: call.clone(),
                                 time: format_msg_time(msg.timestamp),
                             }
                         });
                     }
                     MessageKind::Media { filename } => {
-                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
-                        let file_chat_name = decoded_name();
+                        let is_mine = my_name.as_deref().map_or(false, |my| {
+                            msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
+                        });
+                        let file_chat_name = media_chat_name.clone();
                         items.push(rsx! {
                             MediaMessage {
                                 is_mine,
@@ -124,7 +138,9 @@ pub fn ChatView(name: String) -> Element {
                         });
                     }
                     MessageKind::Voting { question, options } => {
-                        let is_mine = my_name.as_deref().map_or(false, |my| msg.sender.as_deref() == Some(my));
+                        let is_mine = my_name.as_deref().map_or(false, |my| {
+                            msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
+                        });
                         items.push(rsx! {
                             VotingMessage {
                                 is_mine,
@@ -468,22 +484,6 @@ fn day_changed(prev: i64, current: i64) -> bool {
     }
 }
 
-fn url_decode(s: &str) -> String {
-    // Simple percent-decoding for chat names
-    let mut result = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
 
 /// Voting/poll message display
 #[component]

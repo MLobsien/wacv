@@ -6,6 +6,26 @@ pub struct Chat {
     pub messages: Vec<Message>,
 }
 
+/// Strip WhatsApp export decorations from a sender name: LRM (U+200E),
+/// direction marks (U+202A/U+202C), and the "~" / "~\u{202f}" prefix
+/// WhatsApp adds to some contacts.
+pub fn normalize_sender(s: &str) -> &str {
+    let s = s.trim_start_matches('\u{200e}');
+    let s = s.trim_start_matches('\u{202a}');
+    let s = s.trim_start_matches('\u{202e}');
+    let s = s.trim_end_matches('\u{202c}');
+    let s = s.trim_end_matches('\u{200e}');
+    // WhatsApp prefixes some contacts with "~" (optionally followed by a
+    // narrow no-break space or plain space).
+    if let Some(rest) = s.strip_prefix('~') {
+        let rest = rest.trim_start_matches(|c| c == '\u{202f}' || c == ' ');
+        if !rest.is_empty() {
+            return rest;
+        }
+    }
+    s
+}
+
 impl Chat {
     pub fn new(name: String, messages: Vec<Message>) -> Self {
         Self { name, messages }
@@ -27,24 +47,50 @@ impl Chat {
     /// Determine the user's name in a 2-person chat.
     /// The chat is named after the other person, so the user is whoever is not the chat name.
     pub fn my_name(&self) -> Option<String> {
+        // Signal 1: the sender of "you deleted this message" notices is always the user.
+        for m in &self.messages {
+            if let MessageKind::Deleted { by_sender: true } = &m.kind {
+                if let Some(s) = m.sender.as_deref() {
+                    return Some(normalize_sender(s).to_string());
+                }
+            }
+        }
+
         let senders: std::collections::BTreeSet<&str> = self.messages.iter()
             .filter_map(|m| m.sender.as_deref())
+            .map(normalize_sender)
             .collect();
 
-        if senders.len() == 2 {
-            let chat_name = self.display_name();
-            senders.iter()
-                .find(|s| **s != chat_name)
-                .map(|s| s.to_string())
-        } else if senders.len() == 1 {
-            let sender = senders.iter().next()?;
-            if *sender == self.display_name() {
-                None
-            } else {
-                Some(sender.to_string())
+        match senders.len() {
+            0 => None,
+            1 => {
+                let sender = senders.iter().next()?;
+                if *sender == self.display_name() {
+                    None
+                } else {
+                    Some(sender.to_string())
+                }
             }
-        } else {
-            None
+            2 => {
+                let chat_name = self.display_name();
+                // Signal 2: chat named after the other person.
+                if let Some(other) = senders.iter().find(|s| **s == chat_name) {
+                    return senders.iter().find(|s| **s != *other).map(|s| s.to_string());
+                }
+                // Signal 3: phone-number-named chat — the very first message
+                // (encryption notice) is always sent by the contact.
+                let contact = self.messages.first()
+                    .and_then(|m| m.sender.as_deref())
+                    .map(normalize_sender);
+                if let Some(contact) = contact {
+                    if let Some(me) = senders.iter().find(|s| **s != contact) {
+                        return Some(me.to_string());
+                    }
+                }
+                // Fallback: first sender that isn't the chat name.
+                senders.iter().find(|s| **s != chat_name).map(|s| s.to_string())
+            }
+            _ => None, // group chat (3+ senders)
         }
     }
 }
@@ -131,4 +177,60 @@ pub enum CallKind {
     Missed,
     Outgoing,
     Incoming,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_my_name_chat_named_after_other() {
+        let chat = Chat::new(
+            "Anna".into(),
+            vec![
+                Message { timestamp: 1, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 2, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+            ],
+        );
+        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+    }
+
+    #[test]
+    fn test_my_name_phone_chat_uses_first_message_sender() {
+        // Phone-number-named chat: the chat name matches neither sender, so
+        // we fall back to the first message (encryption notice) sender.
+        let chat = Chat::new(
+            "+49 1234".into(),
+            vec![
+                Message { timestamp: 1, sender: Some("~\u{202f}Anna".into()), kind: MessageKind::EncryptionNotice },
+                Message { timestamp: 2, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 3, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+            ],
+        );
+        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+    }
+
+    #[test]
+    fn test_my_name_self_deleted_signal() {
+        // The sender of a "you deleted this message" notice wins even when
+        // the contact's name sorts before the user's.
+        let chat = Chat::new(
+            "+49 1234".into(),
+            vec![
+                Message { timestamp: 1, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 2, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+                Message { timestamp: 3, sender: Some("~\u{202f}Mads".into()), kind: MessageKind::Deleted { by_sender: true } },
+            ],
+        );
+        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+    }
+
+    #[test]
+    fn test_normalize_sender() {
+        assert_eq!(normalize_sender("~\u{202f}Maria"), "Maria");
+        assert_eq!(normalize_sender("~Friedrich Bali"), "Friedrich Bali");
+        assert_eq!(normalize_sender("\u{200e}Du"), "Du");
+        assert_eq!(normalize_sender("\u{202a}+49 1575 8556595\u{202c}"), "+49 1575 8556595");
+        assert_eq!(normalize_sender("Mads"), "Mads");
+    }
 }
