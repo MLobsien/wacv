@@ -96,7 +96,7 @@ pub fn ChatList() -> Element {
         Some(Ok(chats)) => {
             rsx! {
                 for chat_name in chats.iter() {
-                    ChatEntry { name: chat_name.clone() }
+                    ChatEntry { key: "{chat_name}", name: chat_name.clone() }
                 }
             }
         }

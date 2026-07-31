@@ -357,7 +357,26 @@ pub fn chat_name_from_filename(filename: &str) -> String {
         .unwrap_or(filename)
         .to_string();
     // Strip leading \u200e
-    name.trim_start_matches(LRM).to_string()
+    let name = name.trim_start_matches(LRM).to_string();
+    // Browsers/file managers rename duplicate downloads to "Basti (1)".
+    // Strip the " (N)" suffix so the chat is named after the real contact.
+    strip_download_suffix(&name)
+}
+
+/// Remove a browser-style duplicate-download suffix: "Basti (1)" -> "Basti".
+fn strip_download_suffix(name: &str) -> String {
+    if let Some(open) = name.rfind('(') {
+        let tail = &name[open..];
+        let digits = tail.trim_start_matches('(').trim_end_matches(')');
+        let is_dup = tail.starts_with('(')
+            && tail.ends_with(')')
+            && !digits.is_empty()
+            && digits.chars().all(|c| c.is_ascii_digit());
+        if is_dup {
+            return name[..open].trim_end().to_string();
+        }
+    }
+    name.to_string()
 }
 
 #[cfg(test)]

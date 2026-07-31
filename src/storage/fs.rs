@@ -108,11 +108,15 @@ impl ChatStorage {
         Ok(chat)
     }
 
-    #[allow(dead_code)]
     pub fn delete_chat(&self, name: &str) -> Result<()> {
         let chat_dir = self.data_dir.join(name);
         if chat_dir.exists() {
             fs::remove_dir_all(&chat_dir).context(format!("failed to delete chat dir: {}", name))?;
+        }
+        // Media lives alongside chats, so remove it too.
+        let media_dir = self.media_dir.join(name);
+        if media_dir.exists() {
+            fs::remove_dir_all(&media_dir).context(format!("failed to delete media dir: {}", name))?;
         }
         Ok(())
     }

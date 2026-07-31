@@ -9,26 +9,29 @@ pub fn ChatView(name: String) -> Element {
     // `name` is already percent-decoded by the dioxus router (each route
     // segment is decoded during FromStr parsing), so no manual decode here.
     let media_chat_name = name.clone();
+    let menu_name = name.clone();
     let chat = use_resource(move || {
         let n = name.clone();
         async move { ChatStorage::new().ok().and_then(|s| s.load_chat(&n).ok()) }
     });
     let config = use_context::<Signal<Config>>();
-
+    // Per-chat menu state (delete chat)
+    let mut menu_open = use_signal(|| false);
+    let mut confirm_delete = use_signal(|| false);
     // Compute header content outside rsx!
     let header_content: Element = match &*chat.read() {
         Some(Some(c)) => {
             rsx! {
-                div { class: "flex items-center gap-2",
+                div { class: "flex items-center gap-2 flex-1 min-w-0",
                     div { class: "w-9 h-9 rounded-full bg-green-400 flex items-center justify-center text-white font-bold text-sm shrink-0",
                         {c.display_name().chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or("?".to_string())}
                     }
-                    div {
-                        h2 { class: "font-semibold text-sm leading-tight", "{c.display_name()}" }
-                        p { class: "text-xs text-green-200", "WhatsApp Chat" }
-                    }
+                    div { class: "min-w-0",
+                        h2 { class: "font-semibold text-sm leading-tight truncate", "{c.display_name()}" }
+                        p { class: "text-xs text-green-200 truncate", "WhatsApp Chat" }
                 }
             }
+        }
         }
         Some(None) => rsx! {
             div { class: "text-white", "Chat not found" }
@@ -190,6 +193,71 @@ pub fn ChatView(name: String) -> Element {
                     }
                 }
                 {header_content}
+                div { class: "flex-1" }
+                // Per-chat menu (⋮)
+                div { class: "relative",
+                    button {
+                        class: "p-2 rounded-full hover:bg-green-500 transition-colors",
+                        onclick: move |_| {
+                            menu_open.set(!menu_open());
+                            confirm_delete.set(false);
+                        },
+                        svg {
+                            class: "w-6 h-6",
+                            fill: "none",
+                            view_box: "0 0 24 24",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            path {
+                                d: "M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z",
+                                stroke_linecap: "round",
+                                stroke_linejoin: "round",
+                            }
+                        }
+                    }
+                    if menu_open() {
+                        div {
+                            class: "bg-white border border-gray-200 rounded-lg overflow-hidden",
+                            style: "position:absolute; right:0; top:100%; margin-top:4px; z-index:20; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.15);",
+                            button {
+                                style: "display:flex; align-items:center; gap:8px; width:100%; color:#dc2626; cursor:pointer; padding:12px 16px; font-weight:500; background:none; border:none; text-align:left;",
+                                onclick: move |_| {
+                                    if !confirm_delete() {
+                                        confirm_delete.set(true);
+                                    } else {
+                                        // Two-step confirmation: delete chat + its media, then go back.
+                                        eprintln!("[WACV] Deleting chat: {menu_name}");
+                                        let n = menu_name.clone();
+                                        match ChatStorage::new() {
+                                            Ok(storage) => match storage.delete_chat(&n) {
+                                                Ok(()) => eprintln!("[WACV] Deleted chat: {n}"),
+                                                Err(e) => eprintln!("[WACV] Delete err: {e}"),
+                                            },
+                                            Err(e) => eprintln!("[WACV] Storage err: {e}"),
+                                        }
+                                        nav.go_back();
+                                    }
+                                },
+                                svg {
+                                    class: "w-4 h-4 shrink-0",
+                                    fill: "none",
+                                    view_box: "0 0 24 24",
+                                    stroke: "currentColor",
+                                    stroke_width: "2",
+                                    path {
+                                        d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
+                                        stroke_linecap: "round",
+                                        stroke_linejoin: "round",
+                                }
+                                }
+                                span {
+                                    style: "white-space:nowrap; font-size:14px;",
+                                    {if confirm_delete() { "Confirm delete?" } else { "Delete chat" }}
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Messages area
@@ -505,18 +573,24 @@ fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time
                         let pct = if total > 0 { (opt.votes as f64 / total as f64) * 100.0 } else { 0.0 };
                         let vote_label = if opt.votes == 1 { "vote" } else { "votes" };
                         rsx! {
-                            div { class: "flex items-center py-0.5 gap-1",
-                                svg { class: "w-4 h-4 shrink-0 text-gray-400", view_box: "0 0 16 16",
-                                    circle { cx: "8", cy: "8", r: "6", fill: "none", stroke: "currentColor", stroke_width: "2" }
+                            div { class: "flex flex-col py-0.5",
+                                // Row 1: icon + option text (full width) + vote count
+                                div { class: "flex items-center gap-2",
+                                    svg { class: "w-4 h-4 shrink-0 text-gray-400", view_box: "0 0 16 16",
+                                        circle { cx: "8", cy: "8", r: "6", fill: "none", stroke: "currentColor", stroke_width: "2" }
+                                    }
+                                    span { class: "text-sm text-gray-700 min-w-0 flex-1 break-words", "{opt.text}" }
+                                    span { class: "text-xs text-gray-400 font-medium shrink-0 text-right", "{opt.votes} {vote_label}" }
                                 }
-                                span { class: "text-sm text-gray-700 truncate w-24 shrink-0", "{opt.text}" }
-                                div { class: "w-40 h-3 rounded-full overflow-hidden bg-gray-400 shrink-0",
+                                // Row 2: full-width percentage bar
+                                div {
+                                    class: "h-3 rounded-full overflow-hidden bg-gray-400 w-full mt-0.5",
                                     div { class: "h-full rounded-full bg-blue-500", style: "width: {pct}%" }
                                 }
-                                span { class: "text-xs text-gray-400 font-medium shrink-0 w-12 text-right ml-1", "{opt.votes} {vote_label}" }
                             }
-                        }
-                    })}
+                    }
+                }
+                )}
                 }
                 div { class: "px-3 py-1 flex justify-end border-t border-gray-100",
                     span { class: "text-[10px] text-gray-400", "{time}" }
