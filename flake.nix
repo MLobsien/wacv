@@ -1,23 +1,34 @@
 {
-  description = "Dioxus development environment";
+  description = "WACV - WhatsApp Chat Viewer (Dioxus)";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-  outputs = {nixpkgs, ...}: let
+  outputs = {
+    nixpkgs,
+    rust-overlay,
+    ...
+  }: let
     system = "x86_64-linux";
     pkgs = import nixpkgs {
       inherit system;
+      overlays = [rust-overlay.overlays.default];
       config = {
         allowUnfree = true;
         android_sdk.accept_license = true;
       };
     };
+    inherit (pkgs) lib;
 
     sdk =
       (pkgs.androidenv.composeAndroidPackages {
         platformVersions = ["33" "35"];
         buildToolsVersions = ["34.0.0"];
-        # includeEmulator = true;
         includeSystemImages = true;
         systemImageTypes = ["google_apis" "google_apis_playstore"];
         abiVersions = ["arm64-v8a"];
@@ -25,10 +36,19 @@
         ndkVersions = ["27.0.12077973"];
       }).androidsdk;
 
-    nativeBuildInputs = with pkgs; [
-      pkg-config
-      dioxus-cli
-    ];
+    nativeBuildInputs = {
+      linux = with pkgs; [
+        pkg-config
+        wrapGAppsHook3
+      ];
+      android = with pkgs; [
+        RUSTC
+        cargo-ndk
+        pkg-config
+        openjdk
+        sdk
+      ];
+    };
 
     buildInputs = with pkgs; [
       atk
@@ -50,67 +70,156 @@
       libsoup_3
       mesa
       openssl
-      wrapGAppsHook3
       webkitgtk_4_1
-      xdotool
-      xorg.libX11
-      xorg.libxcb
-      zlib
-      sqlite
-      wasm-bindgen-cli
-      binaryen
-      zenity
-      libpng
-      libjpeg
-      dconf
-      shared-mime-info
-      librsvg
-      gst_all_1.gstreamer
-      gst_all_1.gst-plugins-base
-      gst_all_1.gst-plugins-good
       gst_all_1.gst-plugins-bad
       gst_all_1.gst-plugins-ugly
       gst_all_1.gst-vaapi
       gst_all_1.gst-libav
       wayland
-
-      nix-ld
-
-      sdk
-      openjdk
+      xdotool
+      zlib
     ];
 
-    # nix-ld: makes dynamically linked binaries (Android SDK aapt2 etc.) work on NixOS
-    nixLdSetup = ''
-      export NIX_LD="${pkgs.stdenv.cc.libc}/lib/ld-linux-x86-64.so.2"
-      export NIX_LD_LIBRARY_PATH="${pkgs.libglvnd}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib:${pkgs.libGL}/lib"
-    '';
-
-    setup = let
-      pkgConfigPath =
-        builtins.concatStringsSep ":"
-        (map (p: "${p.dev or ""}/lib/pkgconfig")
-          buildInputs);
-    in ''
-      export PKG_CONFIG_PATH=${pkgConfigPath}
-
-      export XDG_DATA_DIRS="${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS"
-
-      export ANDROID_HOME="${sdk}/libexec/android-sdk"
-      export ANDROID_SDK_ROOT="${sdk}/libexec/android-sdk/"
-      export ANDROID_NDK_HOME="${sdk}/libexec/android-sdk/ndk/27.0.12077973"
-      export JAVA_HOME="${pkgs.openjdk}"
-      export PATH="$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools"
-      # ${nixLdSetup}
-    '';
-  in {
-    devShells.${system}.default = pkgs.mkShell {
-      inherit nativeBuildInputs buildInputs;
-      shellHook = setup;
+    RUSTC = pkgs.rust-bin.stable.latest.default.override {
+      targets = ["aarch64-linux-android"];
     };
 
-    packages.${system}.default =
-      pkgs.rustPlatform.buildRustPackage {
+    PKG_CONFIG_PATH =
+      lib.concatStringsSep ":"
+      (map (p: "${p.dev}/lib/pkgconfig")
+        (lib.filter (p: p ? dev) buildInputs))
+      + ":${pkgs.zlib.dev}/share/pkgconfig:${pkgs.xdotool}/lib/pkgconfig";
+    XDG_DATA_DIRS = "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS";
+
+    ANDROID_HOME = "${sdk}/libexec/android-sdk";
+    ANDROID_SDK_ROOT = "${sdk}/libexec/android-sdk/";
+    ANDROID_NDK_HOME = "${sdk}/libexec/android-sdk/ndk/27.0.12077973";
+    JAVA_HOME = "${pkgs.openjdk}";
+
+    GRADLE_OPTS = "-Djdk.map.althashing.threshold=-1 -Dorg.gradle.project.android.aapt2FromMavenOverride=${sdk}/libexec/android-sdk/build-tools/34.0.0/aapt2";
+  in {
+    devShells.${system}.default = pkgs.mkShell {
+      nativeBuildInputs = nativeBuildInputs.linux ++ nativeBuildInputs.android ++ [pkgs.dioxus-cli];
+      inherit
+        buildInputs
+        XDG_DATA_DIRS
+        ANDROID_HOME
+        ANDROID_NDK_HOME
+        ANDROID_SDK_ROOT
+        JAVA_HOME
+        PKG_CONFIG_PATH
+        GRADLE_OPTS
+        ;
+    };
+
+    packages.${system} = let
+      pname = "wacv";
+      version = "0.1.0";
+      src = ./.;
+
+      cargoLock.lockFile = ./Cargo.lock;
+    in {
+      desktop = pkgs.rustPlatform.buildRustPackage {
+        inherit
+          pname
+          version
+          src
+          buildInputs
+          PKG_CONFIG_PATH
+          cargoLock
+          ;
+
+        nativeBuildInputs = nativeBuildInputs.linux;
       };
+
+      android = let
+        gradleDeps = pkgs.stdenv.mkDerivation {
+          dontFixup = true;
+          pname = "wacv-gradle-deps";
+          inherit version src;
+          nativeBuildInputs = [pkgs.openjdk sdk];
+          inherit
+            ANDROID_HOME
+            ANDROID_SDK_ROOT
+            ANDROID_NDK_HOME
+            JAVA_HOME
+            GRADLE_OPTS
+            ;
+
+          outputHashMode = "recursive";
+          outputHash = "sha256-+q2hw5QzcWKwuOBA2clR6g3MP21UjkLLRPuXV8tWTug=";
+
+          buildPhase = ''
+            export HOME="$TMPDIR"
+            export GRADLE_USER_HOME="$TMPDIR/.gradle"
+            export ANDROID_USER_HOME="$TMPDIR/.android"
+            (cd android && ./gradlew --no-daemon \
+              -Pkotlin.compiler.execution.strategy=in-process assembleDebug)
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+            cp -a "$GRADLE_USER_HOME"/. $out/
+
+            find $out -name '*.lock' -delete
+            find $out -name '*.lck' -delete
+            rm -rf $out/daemon $out/.tmp $out/kotlin-profile $out/notifications \
+                   $out/caches/journal-1 $out/caches/build-cache-1
+
+            rm -rf $out/caches/9.1.0 $out/caches/jars-9
+            rm -f $out/caches/modules-2/gc.properties \
+                  $out/caches/gc.properties
+          '';
+        };
+      in
+        pkgs.rustPlatform.buildRustPackage {
+          inherit
+            pname
+            version
+            src
+            ANDROID_HOME
+            ANDROID_SDK_ROOT
+            ANDROID_NDK_HOME
+            JAVA_HOME
+            PKG_CONFIG_PATH
+            cargoLock
+            buildInputs
+            GRADLE_OPTS
+            gradleDeps
+            ;
+
+          dontCargoCheck = true;
+
+          nativeBuildInputs = nativeBuildInputs.android;
+
+          buildPhase = ''
+            runHook preBuild
+            ${RUSTC}/bin/cargo ndk build --target aarch64-linux-android --release --lib
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+
+            mkdir -p android/app/src/main/jniLibs/arm64-v8a
+            cp target/aarch64-linux-android/release/libdioxusmain.so android/app/src/main/jniLibs/arm64-v8a/libdioxusmain.so
+
+            export HOME="$TMPDIR"
+            export GRADLE_USER_HOME="$TMPDIR/.gradle"
+            export ANDROID_USER_HOME="$TMPDIR/.android"
+
+            cp -a "$gradleDeps"/. "$GRADLE_USER_HOME"/
+            chmod -R u+w "$GRADLE_USER_HOME"
+
+            (cd android && ./gradlew --offline --no-daemon \
+            -Pkotlin.compiler.execution.strategy=in-process assembleDebug)
+
+            mkdir -p $out/apk
+            cp android/app/build/outputs/apk/debug/app-debug.apk $out/apk/wacv.apk
+
+            runHook postInstall
+          '';
+        };
+    };
   };
 }
