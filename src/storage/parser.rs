@@ -6,15 +6,11 @@ const LRM: char = '\u{200e}';
 
 /// Parse the _chat.txt content from a WhatsApp export
 pub fn parse_chat(content: &str) -> Vec<Message> {
-    let line_re = Regex::new(
-        r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): (.*)$",
-    )
-    .expect("invalid line regex");
+    let line_re = Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): (.*)$")
+        .expect("invalid line regex");
 
-    let date_re = Regex::new(
-        r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\]",
-    )
-    .expect("invalid date regex");
+    let date_re =
+        Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\]").expect("invalid date regex");
 
     // First pass: collect raw lines, handling multi-line messages
     let mut raw_messages: Vec<(String, String, String)> = Vec::new();
@@ -76,11 +72,7 @@ pub fn parse_chat(content: &str) -> Vec<Message> {
 fn parse_timestamp(ts: &str) -> Option<i64> {
     // Format: "DD.MM.YY, HH:MM:SS"
     // chrono expects "YY-MM-DD HH:MM:SS"
-    let normalized = ts
-        .replace('.', "-")
-        .replace(',', "")
-        .trim()
-        .to_string();
+    let normalized = ts.replace('.', "-").replace(',', "").trim().to_string();
 
     // Parse with year-first format for NaiveDateTime
     // Input is "DD-MM-YY HH:MM:SS"
@@ -110,10 +102,18 @@ fn parse_timestamp(ts: &str) -> Option<i64> {
         return None;
     };
 
-    let _formatted = format!("{:04}-{:02}-{} {} {}", year_full, month.parse::<i32>().unwrap_or(0), day, time, "00");
+    let _formatted = format!(
+        "{:04}-{:02}-{} {} {}",
+        year_full,
+        month.parse::<i32>().unwrap_or(0),
+        day,
+        time,
+        "00"
+    );
     // Actually simpler: just parse DD.MM.YY HH:MM:SS directly with custom parsing
     let naive = NaiveDateTime::parse_from_str(
-        &format!("{:02}.{:02}.{:04} {}", 
+        &format!(
+            "{:02}.{:02}.{:04} {}",
             day.parse::<u32>().unwrap_or(1),
             month.parse::<u32>().unwrap_or(1),
             year_full,
@@ -204,7 +204,12 @@ fn extract_media_filename(text: &str) -> Option<String> {
     // Match <Anhang: filename> or <Attachment: filename>
     let re = Regex::new(r"<Anhang:\s*(.+?)>|<Attachment:\s*(.+?)>").expect("invalid media regex");
     if let Some(caps) = re.captures(text) {
-        let filename = caps.get(1).or_else(|| caps.get(2))?.as_str().trim().to_string();
+        let filename = caps
+            .get(1)
+            .or_else(|| caps.get(2))?
+            .as_str()
+            .trim()
+            .to_string();
         if !filename.is_empty() {
             return Some(filename);
         }
@@ -250,7 +255,10 @@ fn detect_call(text: &str) -> Option<CallInfo> {
             }
         });
 
-        return Some(CallInfo { kind, duration_secs });
+        return Some(CallInfo {
+            kind,
+            duration_secs,
+        });
     }
 
     None
@@ -270,10 +278,9 @@ fn strip_edited_suffix(text: &str) -> Option<String> {
     }
 
     // Also try without LRM
-    let edited_re2 = Regex::new(
-        r"<Diese Nachricht wurde bearbeitet\.>\s*$|<This message was edited\.>\s*$",
-    )
-    .expect("invalid edited regex2");
+    let edited_re2 =
+        Regex::new(r"<Diese Nachricht wurde bearbeitet\.>\s*$|<This message was edited\.>\s*$")
+            .expect("invalid edited regex2");
 
     if edited_re2.is_match(text) {
         let base = edited_re2.replace(text, "").trim().to_string();
@@ -285,7 +292,8 @@ fn strip_edited_suffix(text: &str) -> Option<String> {
 
 /// Detect if the message is a voting/poll (contains LRM + OPTION: lines).
 fn detect_voting(text: &str) -> bool {
-    text.lines().any(|line| line.contains('\u{200e}') && line.trim().contains("OPTION:"))
+    text.lines()
+        .any(|line| line.contains('\u{200e}') && line.trim().contains("OPTION:"))
 }
 
 /// Parse a voting message into question and options.
@@ -306,9 +314,8 @@ fn parse_voting(text: &str) -> (String, Vec<VoteOption>) {
 
     // Match OPTION lines: LRM + OPTION: text (N words)
     // Where "words" is any language variant (votes, Stimmen, vote, Stimme, etc.)
-    let option_re = Regex::new(
-        r"^\u{200e}OPTION:\s*(.*?)\s*\((\d+)\s*\S+\)\s*$"
-    ).expect("invalid option regex");
+    let option_re = Regex::new(r"^\u{200e}OPTION:\s*(.*?)\s*\((\d+)\s*\S+\)\s*$")
+        .expect("invalid option regex");
 
     for line in text.lines() {
         if line.trim().contains('\u{200e}') && line.trim().contains("OPTION:") {
@@ -322,7 +329,10 @@ fn parse_voting(text: &str) -> (String, Vec<VoteOption>) {
                 // Fallback: everything after "OPTION: " prefix
                 if let Some(idx) = line.trim().find("OPTION:") {
                     let after = line.trim()[idx + "OPTION:".len()..].trim().to_string();
-                    options.push(VoteOption { text: after, votes: 0 });
+                    options.push(VoteOption {
+                        text: after,
+                        votes: 0,
+                    });
                 }
             }
         } else if !in_options {
@@ -358,12 +368,9 @@ pub fn chat_name_from_filename(filename: &str) -> String {
         .to_string();
     // Strip leading \u200e
     let name = name.trim_start_matches(LRM).to_string();
-    // Browsers/file managers rename duplicate downloads to "Basti (1)".
-    // Strip the " (N)" suffix so the chat is named after the real contact.
     strip_download_suffix(&name)
 }
 
-/// Remove a browser-style duplicate-download suffix: "Basti (1)" -> "Basti".
 fn strip_download_suffix(name: &str) -> String {
     if let Some(open) = name.rfind('(') {
         let tail = &name[open..];
@@ -408,7 +415,8 @@ mod tests {
 
     #[test]
     fn test_parse_media() {
-        let input = "[24.09.25, 17:50:12] Bob: \u{200e}<Anhang: 00000005-PHOTO-2025-09-24-17-50-12.jpg>";
+        let input =
+            "[24.09.25, 17:50:12] Bob: \u{200e}<Anhang: 00000005-PHOTO-2025-09-24-17-50-12.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert!(matches!(messages[0].kind, MessageKind::Media { .. }));
@@ -445,7 +453,8 @@ mod tests {
 
     #[test]
     fn test_parse_missed_call() {
-        let input = "[30.04.25, 16:46:59] Charlie: \u{200e}Missed voice call. \u{200e}Tap to call back.";
+        let input =
+            "[30.04.25, 16:46:59] Charlie: \u{200e}Missed voice call. \u{200e}Tap to call back.";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         if let MessageKind::Call(call) = &messages[0].kind {
@@ -547,8 +556,14 @@ mod tests {
             kind: MessageKind::Voting {
                 question: "Best option?".to_string(),
                 options: vec![
-                    VoteOption { text: "A".to_string(), votes: 10 },
-                    VoteOption { text: "B".to_string(), votes: 5 },
+                    VoteOption {
+                        text: "A".to_string(),
+                        votes: 10,
+                    },
+                    VoteOption {
+                        text: "B".to_string(),
+                        votes: 5,
+                    },
                 ],
             },
         };
@@ -556,21 +571,21 @@ mod tests {
     }
 }
 
-    #[test]
-    fn test_parse_voting_question_on_separate_line() {
-        // Real format from 11t chat: ABSTIMMUNG: on its own line,
-        // question on next line
-        let input = "[14.06.25, 23:29:09] ~ Elias: ‎ABSTIMMUNG:\nElias?\n\u{200e}OPTION: Ja (1 Stimme)\n\u{200e}OPTION: Nein (7 Stimmen)";
-        let messages = parse_chat(input);
-        assert_eq!(messages.len(), 1);
-        assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
-        assert_eq!(messages[0].sender.as_deref(), Some("Elias"));
-        if let MessageKind::Voting { question, options } = &messages[0].kind {
-            assert_eq!(question, "Elias?");
-            assert_eq!(options.len(), 2);
-            assert_eq!(options[0].text, "Ja");
-            assert_eq!(options[0].votes, 1);
-            assert_eq!(options[1].text, "Nein");
-            assert_eq!(options[1].votes, 7);
-        }
+#[test]
+fn test_parse_voting_question_on_separate_line() {
+    // Real format from 11t chat: ABSTIMMUNG: on its own line,
+    // question on next line
+    let input = "[14.06.25, 23:29:09] ~ Elias: ‎ABSTIMMUNG:\nElias?\n\u{200e}OPTION: Ja (1 Stimme)\n\u{200e}OPTION: Nein (7 Stimmen)";
+    let messages = parse_chat(input);
+    assert_eq!(messages.len(), 1);
+    assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
+    assert_eq!(messages[0].sender.as_deref(), Some("Elias"));
+    if let MessageKind::Voting { question, options } = &messages[0].kind {
+        assert_eq!(question, "Elias?");
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].text, "Ja");
+        assert_eq!(options[0].votes, 1);
+        assert_eq!(options[1].text, "Nein");
+        assert_eq!(options[1].votes, 7);
     }
+}
