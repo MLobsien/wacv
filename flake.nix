@@ -40,6 +40,7 @@
       linux = with pkgs; [
         pkg-config
         wrapGAppsHook3
+        makeWrapper
       ];
       android = with pkgs; [
         RUSTC
@@ -71,14 +72,20 @@
       mesa
       openssl
       webkitgtk_4_1
-      gst_all_1.gst-plugins-bad
-      gst_all_1.gst-plugins-ugly
-      gst_all_1.gst-vaapi
-      gst_all_1.gst-libav
       wayland
       xdotool
-      zlib
+    ] ++ gstPlugins;
+
+    gstPlugins = with pkgs.gst_all_1; [
+      gst-plugins-base
+      gst-plugins-good
+      gst-plugins-bad
+      gst-plugins-ugly
+      gst-vaapi
+      gst-libav
     ];
+
+    gstPluginPath = lib.makeSearchPath "lib/gstreamer-1.0" gstPlugins;
 
     RUSTC = pkgs.rust-bin.stable.latest.default.override {
       targets = ["aarch64-linux-android"];
@@ -130,6 +137,9 @@
           ;
 
         nativeBuildInputs = nativeBuildInputs.linux;
+        makeWrapperArgs = [
+          "--prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${gstPluginPath}"
+        ];
       };
 
       android = let
