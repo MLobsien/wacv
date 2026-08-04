@@ -41,6 +41,7 @@
         pkg-config
         wrapGAppsHook3
         makeWrapper
+        imagemagick
       ];
       android = with pkgs; [
         RUSTC
@@ -51,30 +52,33 @@
       ];
     };
 
-    buildInputs = with pkgs; [
-      atk
-      atkmm
-      cairo
-      fontconfig
-      fribidi
-      gdk-pixbuf
-      glib
-      glib-networking
-      gtk3
-      pango
-      gsettings-desktop-schemas
-      harfbuzz
-      freetype
-      libdrm
-      libGL
-      libgpg-error
-      libsoup_3
-      mesa
-      openssl
-      webkitgtk_4_1
-      wayland
-      xdotool
-    ] ++ gstPlugins;
+    buildInputs = with pkgs;
+      [
+        atk
+        atkmm
+        cairo
+        fontconfig
+        fribidi
+        gdk-pixbuf
+        glib
+        glib-networking
+        gtk3
+        pango
+        gsettings-desktop-schemas
+        harfbuzz
+        freetype
+        libdrm
+        libGL
+        libgpg-error
+        libsoup_3
+        mesa
+        openssl
+        webkitgtk_4_1
+        wayland
+        xdotool
+        zenity
+      ]
+      ++ gstPlugins;
 
     gstPlugins = with pkgs.gst_all_1; [
       gst-plugins-base
@@ -131,15 +135,36 @@
           pname
           version
           src
-          buildInputs
           PKG_CONFIG_PATH
           cargoLock
           ;
 
         nativeBuildInputs = nativeBuildInputs.linux;
-        makeWrapperArgs = [
-          "--prefix GST_PLUGIN_SYSTEM_PATH_1_0 : ${gstPluginPath}"
-        ];
+        buildInputs = buildInputs ++ [pkgs.zenity];
+        postInstall = ''
+          install -Dm644 <(cat << EOF
+          [Desktop Entry]
+          Type=Application
+          Name=WACV
+          GenericName=WhatsApp Chat Viewer
+          Comment=Import and view WhatsApp chat exports
+          Exec=$out/bin/wacv
+          Icon=wacv
+          Terminal=false
+          Categories=Utility;
+          Keywords=whatsapp;chat;viewer;export;
+          EOF
+          ) $out/share/applications/wacv.desktop
+
+          install -Dm644 assets/icon.svg $out/share/icons/hicolor/scalable/apps/wacv.svg
+
+          mkdir -p $out/share/icons/hicolor/256x256/apps
+          ${pkgs.imagemagick}/bin/magick assets/icon.svg -resize 256x256 \
+            $out/share/icons/hicolor/256x256/apps/wacv.png
+        '';
+        preFixup = ''
+          gappsWrapperArgs+=(--prefix PATH : ${pkgs.zenity}/bin)
+        '';
       };
 
       android = let
