@@ -1,23 +1,22 @@
 use dioxus::prelude::*;
+#[cfg(target_os = "android")]
+use futures::StreamExt;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::thread;
-#[cfg(target_os = "android")]
-use futures::StreamExt;
 
-mod components;
-mod storage;
 #[cfg(target_os = "android")]
 mod android;
+mod components;
+mod storage;
 
+use crate::storage::config::Config;
 use components::ChatList;
 use components::ChatView;
-use crate::storage::config::Config;
 use components::Settings;
 
-const MAIN_CSS: &str = include_str!("../assets/main.css");
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 
 static MEDIA_CACHE_BASE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
@@ -95,8 +94,7 @@ fn mime_for_extension(filename: &str) -> &'static str {
 }
 
 fn start_media_server() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("[WACV] Failed to bind media server");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("[WACV] Failed to bind media server");
     let port = listener.local_addr().unwrap().port();
     eprintln!("[WACV] HTTP media server on 127.0.0.1:{}", port);
 
@@ -115,7 +113,10 @@ fn start_media_server() -> u16 {
 }
 
 fn handle_connection(mut stream: TcpStream) {
-    let cache_base = MEDIA_CACHE_BASE.lock().unwrap().clone()
+    let cache_base = MEDIA_CACHE_BASE
+        .lock()
+        .unwrap()
+        .clone()
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     let mut reader = BufReader::new(&stream);
 
@@ -137,8 +138,12 @@ fn handle_connection(mut stream: TcpStream) {
     // Drain remaining headers
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).is_err() { return; }
-        if line.trim().is_empty() { break; }
+        if reader.read_line(&mut line).is_err() {
+            return;
+        }
+        if line.trim().is_empty() {
+            break;
+        }
     }
 
     // Decode URL path
@@ -179,9 +184,7 @@ pub extern "C" fn main() {
     eprintln!("[WACV] Android main()");
     // On Android, dirs::*() returns None.  Use temp_dir as fallback until
     // android::init() sets the real paths via JNI.
-    let cache_base = std::env::temp_dir()
-        .join("wacv")
-        .join("media");
+    let cache_base = std::env::temp_dir().join("wacv").join("media");
     set_media_cache_base(cache_base);
 
     let port = start_media_server();
@@ -291,7 +294,6 @@ fn App() -> Element {
     let dark_class = if config.read().dark_mode { "dark" } else { "" };
     rsx! {
         style { "{TAILWIND_CSS}" }
-        style { "{MAIN_CSS}" }
         div { class: "h-screen w-screen flex flex-col {dark_class} bg-gray-100 dark:bg-gray-900 overflow-hidden",
             {content}
         }
