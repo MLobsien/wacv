@@ -79,9 +79,9 @@ pub fn ChatList() -> Element {
     let list_content: Element = match &*chat_list.read() {
         Some(Ok(chats)) if chats.is_empty() => {
             rsx! {
-                div { class: "flex flex-col items-center justify-center h-full text-gray-400 p-8 text-center",
+                div { class: "flex flex-col items-center justify-center h-full text-gray-400 dark:text-gray-500 p-8 text-center",
                     svg {
-                        class: "w-16 h-16 mb-4 text-gray-300",
+                        class: "w-16 h-16 mb-4 text-gray-300 dark:text-gray-600",
                         fill: "none",
                         view_box: "0 0 24 24",
                         stroke: "currentColor",
@@ -111,13 +111,13 @@ pub fn ChatList() -> Element {
     };
 
     rsx! {
-        div { class: "flex flex-col h-full bg-white",
+        div { class: "flex flex-col h-full bg-white dark:bg-gray-900",
             Header {}
             if show_name_prompt {
-                div { class: "bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-xs text-yellow-800 flex items-center gap-1.5",
+                div { class: "bg-yellow-50 dark:bg-yellow-900/40 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2 text-xs text-yellow-800 dark:text-yellow-200 flex items-center gap-1.5",
                     span { "\u{26A0}\u{FE0F} Set your name in" }
                     button {
-                        class: "underline font-medium hover:text-yellow-900",
+                        class: "underline font-medium hover:text-yellow-900 dark:hover:text-yellow-100",
                         onclick: move |_| { nav.push("/settings"); },
                         "Settings"
                     }
@@ -141,7 +141,7 @@ fn Header() -> Element {
     #[cfg(target_os = "android")]
     let import_button = rsx! {
         button {
-            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white text-green-700 rounded-full text-sm font-medium hover:bg-green-50 transition-colors shadow-sm cursor-pointer",
+            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-green-700 dark:text-green-400 rounded-full text-sm font-medium hover:bg-green-50 dark:hover:bg-gray-700 transition-colors shadow-sm cursor-pointer",
             onclick: move |_| {
                 eprintln!("[WACV] Import clicked");
                 status.set("Opening JNI picker...".to_string());
@@ -195,7 +195,7 @@ fn Header() -> Element {
     #[cfg(not(target_os = "android"))]
     let import_button = rsx! {
         button {
-            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white text-green-700 rounded-full text-sm font-medium hover:bg-green-50 transition-colors shadow-sm",
+            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-green-700 dark:text-green-400 rounded-full text-sm font-medium hover:bg-green-50 dark:hover:bg-gray-700 transition-colors shadow-sm",
             onclick: move |_| {
                 eprintln!("[WACV] Import clicked");
                 status.set("Opening dialog...".to_string());
@@ -299,7 +299,7 @@ fn ChatEntry(name: String) -> Element {
 
     rsx! {
         div {
-            class: "flex items-center px-4 py-3 hover:bg-gray-100 cursor-pointer border-b border-gray-100 transition-colors",
+            class: "flex items-center px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer border-b border-gray-100 dark:border-gray-800 transition-colors",
             onclick: move |_| {
                 nav.push(format!("/chat/{}", url_encode(&name)));
             },
@@ -312,10 +312,10 @@ fn ChatEntry(name: String) -> Element {
             // Name & preview
             div { class: "ml-3 flex-1 min-w-0",
                 div { class: "flex items-center justify-between",
-                    h3 { class: "font-medium text-gray-900 truncate", "{display_name}" }
-                    span { class: "text-xs text-gray-400 shrink-0 ml-2", "{last_time}" }
+                    h3 { class: "font-medium text-gray-900 dark:text-gray-100 truncate", "{display_name}" }
+                    span { class: "text-xs text-gray-400 dark:text-gray-500 shrink-0 ml-2", "{last_time}" }
                 }
-                p { class: "text-sm text-gray-500 truncate mt-0.5", "{last_preview}" }
+                p { class: "text-sm text-gray-500 dark:text-gray-400 truncate mt-0.5", "{last_preview}" }
             }
         }
     }

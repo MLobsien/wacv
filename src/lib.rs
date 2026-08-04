@@ -286,10 +286,11 @@ fn App() -> Element {
     #[cfg(not(target_os = "android"))]
     let content = rsx! { Router::<Route> {} };
 
+    let dark_class = if config.read().dark_mode { "dark" } else { "" };
     rsx! {
         style { "{TAILWIND_CSS}" }
         style { "{MAIN_CSS}" }
-        div { class: "h-screen w-screen flex flex-col bg-gray-100 overflow-hidden",
+        div { class: "h-screen w-screen flex flex-col {dark_class} bg-gray-100 dark:bg-gray-900 overflow-hidden",
             {content}
         }
     }

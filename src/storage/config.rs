@@ -7,6 +7,8 @@ pub struct Config {
     /// The user's display name, used to identify their own messages in group chats.
     /// When `None`, the app falls back to the 1:1 heuristic in `Chat::my_name()`.
     pub user_name: Option<String>,
+    /// Whether the UI uses the dark theme.
+    pub dark_mode: bool,
 }
 
 impl Config {
@@ -48,6 +50,6 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { user_name: None }
+        Self { user_name: None, dark_mode: false }
     }
 }

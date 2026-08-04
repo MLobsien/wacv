@@ -162,7 +162,7 @@ pub fn ChatView(name: String) -> Element {
             }
         }
         Some(None) => rsx! {
-            div { class: "flex items-center justify-center h-full text-gray-400",
+            div { class: "flex items-center justify-center h-full text-gray-400 dark:text-gray-500",
                 "Chat could not be loaded"
             }
         },
@@ -174,7 +174,7 @@ pub fn ChatView(name: String) -> Element {
     };
 
     rsx! {
-        div { class: "flex flex-col h-full bg-gray-100",
+        div { class: "flex flex-col h-full bg-gray-100 dark:bg-gray-900",
             // Chat header
             div { class: "sticky top-0 z-10 bg-green-600 text-white px-2 py-2 flex items-center gap-2 shadow-md",
                 button {
@@ -218,7 +218,7 @@ pub fn ChatView(name: String) -> Element {
                     }
                     if menu_open() {
                         div {
-                            class: "bg-white border border-gray-200 rounded-lg overflow-hidden",
+                            class: "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden",
                             style: "position:absolute; right:0; top:100%; margin-top:4px; z-index:20; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.15);",
                             button {
                                 style: "display:flex; align-items:center; gap:8px; width:100%; color:#dc2626; cursor:pointer; padding:12px 16px; font-weight:500; background:none; border:none; text-align:left;",
@@ -274,7 +274,7 @@ pub fn ChatView(name: String) -> Element {
 fn DateSeparator(date: String) -> Element {
     rsx! {
         div { class: "flex justify-center my-2",
-            span { class: "text-xs text-gray-500 bg-white/80 px-2 py-1 rounded shadow-sm", "{date}" }
+            span { class: "text-xs text-gray-500 dark:text-gray-400 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded shadow-sm", "{date}" }
         }
     }
 }
@@ -284,7 +284,7 @@ fn DateSeparator(date: String) -> Element {
 fn SystemMessage(text: String) -> Element {
     rsx! {
         div { class: "flex justify-center my-2",
-            span { class: "text-xs text-gray-500 italic bg-white/60 px-3 py-1.5 rounded-lg max-w-xs text-center leading-relaxed",
+            span { class: "text-xs text-gray-500 dark:text-gray-400 italic bg-white/60 dark:bg-gray-800/60 px-3 py-1.5 rounded-lg max-w-xs text-center leading-relaxed",
                 "{text}"
             }
         }
@@ -301,9 +301,9 @@ fn MessageBubble(
     time: String,
 ) -> Element {
     let bubble_class = if is_mine {
-        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end"
+        "bg-[#d9fdd3] dark:bg-[#005c4b] rounded-[8px_0_8px_8px] self-end"
     } else {
-        "bg-white rounded-[0_8px_8px_8px] self-start"
+        "bg-white dark:bg-[#202c33] rounded-[0_8px_8px_8px] self-start"
     };
 
     let container_class = if is_mine { "items-end" } else { "items-start" };
@@ -312,19 +312,19 @@ fn MessageBubble(
         div { class: "flex flex-col {container_class} mb-1.5",
             // Sender name (for group chats, other people)
             if let Some(s) = sender {
-                span { class: "text-xs text-gray-500 ml-1 mb-0.5 font-medium", "{s}" }
+                span { class: "text-xs text-gray-500 dark:text-gray-400 ml-1 mb-0.5 font-medium", "{s}" }
             }
 
             div { class: "max-w-[75%] shadow-sm {bubble_class} px-3 py-1.5",
                 // Message content - render newlines as <br>
-                div { class: "text-sm text-gray-900 whitespace-pre-wrap break-words",
+                div { class: "text-sm text-gray-900 dark:text-gray-100 whitespace-pre-wrap break-words",
                     for part in split_links(&content) {
                         match part {
                             TextPart::Text(s) => rsx! { "{s}" },
                             TextPart::Link(href) => rsx! {
                                 a {
                                     href: "{href}",
-                                    class: "text-blue-600 underline break-all",
+                                    class: "text-blue-600 dark:text-blue-400 underline break-all",
                                     "{href}"
                                 }
                             },
@@ -351,7 +351,7 @@ fn MessageBubble(
 fn DoubleCheck() -> Element {
     rsx! {
         svg {
-            class: "w-3.5 h-3.5 text-blue-500",
+            class: "w-3.5 h-3.5 text-blue-500 dark:text-blue-400",
             view_box: "0 0 16 11",
             fill: "currentColor",
             path { d: "M11.071.653a.457.457 0 00-.304-.102.493.493 0 00-.381.178l-6.19 7.636-2.011-2.095a.463.463 0 00-.336-.153.457.457 0 00-.335.128.51.51 0 00-.14.32.484.484 0 00.14.345l2.394 2.493a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
@@ -365,9 +365,9 @@ fn DoubleCheck() -> Element {
 fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Element {
     let container_class = if is_mine { "items-end" } else { "items-start" };
     let text_color = if is_mine {
-        "text-green-700"
+        "text-green-700 dark:text-green-400"
     } else {
-        "text-red-500"
+        "text-red-500 dark:text-red-400"
     };
 
     let call_label = match info.kind {
@@ -395,7 +395,7 @@ fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Elem
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
-            div { class: "max-w-[75%] bg-white rounded-lg shadow-sm px-4 py-2 flex items-center gap-3",
+            div { class: "max-w-[75%] bg-white dark:bg-gray-800 rounded-lg shadow-sm px-4 py-2 flex items-center gap-3",
                 // Phone icon
                 svg {
                     class: "w-5 h-5 shrink-0 {text_color}",
@@ -410,9 +410,9 @@ fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Elem
                     }
                 }
                 div {
-                    p { class: "text-sm font-medium text-gray-900", "{call_label}" }
+                    p { class: "text-sm font-medium text-gray-900 dark:text-gray-100", "{call_label}" }
                     if !duration_text.is_empty() {
-                        p { class: "text-xs text-gray-500", "{duration_text}" }
+                        p { class: "text-xs text-gray-500 dark:text-gray-400", "{duration_text}" }
                     }
                 }
                 span { class: "text-[10px] text-gray-400 ml-auto shrink-0", "{time}" }
@@ -429,9 +429,9 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Opt
         // Stickers render without a bubble background
         if is_mine { "self-end" } else { "self-start" }
     } else if is_mine {
-        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end shadow-sm"
+        "bg-[#d9fdd3] dark:bg-[#005c4b] rounded-[8px_0_8px_8px] self-end shadow-sm"
     } else {
-        "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
+        "bg-white dark:bg-[#202c33] rounded-[0_8px_8px_8px] self-start shadow-md"
     };
     let container_class = if is_mine { "items-end" } else { "items-start" };
 
@@ -445,8 +445,7 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Opt
     let is_video = filename.contains("VIDEO") || filename.contains(".mp4");
     let is_audio =
         filename.contains("AUDIO") || filename.contains(".opus") || filename.contains(".ogg");
-    let audio_bg = if is_mine { "bg-green-100" } else { "bg-gray-50" };
-    let audio_bg = if is_mine { "bg-green-100" } else { "bg-gray-50" };
+    let audio_bg = if is_mine { "bg-green-100 dark:bg-green-900" } else { "bg-gray-50 dark:bg-gray-800" };
     // Image lightbox (open when the user clicks a photo/sticker)
     let mut lightbox = use_signal(|| false);
 
@@ -488,11 +487,11 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Opt
                 } else {
                     // Generic document
                     div { class: "flex items-center gap-2 px-3 py-2",
-                        svg { class: "w-8 h-8 text-gray-400 shrink-0", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", stroke_width: "2",
+                        svg { class: "w-8 h-8 text-gray-400 dark:text-gray-500 shrink-0", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", stroke_width: "2",
                             path { d: "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" }
                         }
                         div { class: "min-w-0",
-                            p { class: "text-xs text-gray-600 truncate", "{filename}" }
+                            p { class: "text-xs text-gray-600 dark:text-gray-300 truncate", "{filename}" }
                         }
                     }
                 }
@@ -500,14 +499,14 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Opt
                 if let Some(cap) = caption.as_ref() {
                     if !cap.is_empty() {
                         div { class: "px-2 py-1",
-                            p { class: "text-sm text-gray-700 whitespace-pre-wrap [overflow-wrap:anywhere]",
+                            p { class: "text-sm text-gray-700 dark:text-gray-200 whitespace-pre-wrap [overflow-wrap:anywhere]",
                                 for part in split_links(cap) {
                                     match part {
                                         TextPart::Text(s) => rsx! { "{s}" },
                                         TextPart::Link(href) => rsx! {
                                             a {
                                                 href: "{href}",
-                                                class: "text-blue-600 underline break-all",
+                                                class: "text-blue-600 dark:text-blue-400 underline break-all",
                                                 "{href}"
                                             }
                                         },
@@ -601,7 +600,7 @@ fn DeletedMessage(is_mine: bool) -> Element {
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
-            div { class: "max-w-[75%] bg-gray-100 rounded-lg px-3 py-2 italic text-gray-400 text-sm border border-gray-200",
+            div { class: "max-w-[75%] bg-gray-100 dark:bg-gray-800 rounded-lg px-3 py-2 italic text-gray-400 dark:text-gray-500 text-sm border border-gray-200 dark:border-gray-700",
                 svg {
                     class: "w-3.5 h-3.5 inline mr-1 -mt-0.5",
                     fill: "none",
@@ -735,9 +734,9 @@ fn day_changed(prev: i64, current: i64) -> bool {
 fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time: String) -> Element {
     let container_class = if is_mine { "items-end" } else { "items-start" };
     let bubble_class = if is_mine {
-        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end"
+        "bg-[#d9fdd3] dark:bg-[#005c4b] rounded-[8px_0_8px_8px] self-end"
     } else {
-        "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
+        "bg-white dark:bg-[#202c33] rounded-[0_8px_8px_8px] self-start shadow-md"
     };
 
     let total: u32 = options.iter().map(|o| o.votes).sum();
@@ -745,7 +744,7 @@ fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time
         div { class: "flex flex-col {container_class} mb-1.5",
             div { class: "max-w-[75%] overflow-hidden {bubble_class}",
                 div { class: "px-3 py-2",
-                    p { class: "text-sm font-semibold text-gray-900 mb-2", "{question}" }
+                    p { class: "text-sm font-semibold text-gray-900 dark:text-gray-100 mb-2", "{question}" }
                     {options.iter().map(|opt| {
                         let pct = if total > 0 { (opt.votes as f64 / total as f64) * 100.0 } else { 0.0 };
                         let vote_label = if opt.votes == 1 { "vote" } else { "votes" };
@@ -753,15 +752,15 @@ fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time
                             div { class: "flex flex-col py-0.5",
                                 // Row 1: icon + option text (full width) + vote count
                                 div { class: "flex items-center gap-2",
-                                    svg { class: "w-4 h-4 shrink-0 text-gray-400", view_box: "0 0 16 16",
+                                    svg { class: "w-4 h-4 shrink-0 text-gray-400 dark:text-gray-500", view_box: "0 0 16 16",
                                         circle { cx: "8", cy: "8", r: "6", fill: "none", stroke: "currentColor", stroke_width: "2" }
                                     }
-                                    span { class: "text-sm text-gray-700 min-w-0 flex-1 break-words", "{opt.text}" }
-                                    span { class: "text-xs text-gray-400 font-medium shrink-0 text-right", "{opt.votes} {vote_label}" }
+                                    span { class: "text-sm text-gray-700 dark:text-gray-300 min-w-0 flex-1 break-words", "{opt.text}" }
+                                    span { class: "text-xs text-gray-400 dark:text-gray-500 font-medium shrink-0 text-right", "{opt.votes} {vote_label}" }
                                 }
                                 // Row 2: full-width percentage bar
                                 div {
-                                    class: "h-3 rounded-full overflow-hidden bg-gray-400 w-full mt-0.5",
+                                    class: "h-3 rounded-full overflow-hidden bg-gray-400 dark:bg-gray-600 w-full mt-0.5",
                                     div { class: "h-full rounded-full bg-blue-500", style: "width: {pct}%" }
                                 }
                             }
@@ -769,7 +768,7 @@ fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time
                 }
                 )}
                 }
-                div { class: "px-3 py-1 flex justify-end border-t border-gray-100",
+                div { class: "px-3 py-1 flex justify-end border-t border-gray-100 dark:border-gray-700",
                     span { class: "text-[10px] text-gray-400", "{time}" }
                 }
             }
