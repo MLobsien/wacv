@@ -110,7 +110,12 @@ impl Message {
                 MessageKind::Call(c) => c.preview_text(),
                 _ => unreachable!(),
             },
-            MessageKind::Media { filename, .. } => {
+            MessageKind::Media { filename, caption } => {
+                if let Some(caption) = caption {
+                    if !caption.is_empty() {
+                        return caption.as_str();
+                    }
+                }
                 if filename.contains("STICKER") {
                     "Sticker"
                 } else if filename.contains("PHOTO") || filename.contains("IMAGE") {
@@ -140,8 +145,8 @@ pub enum MessageKind {
     System(String),
     /// Call info (voice/video call, missed, duration)
     Call(CallInfo),
-    /// Media attachment (image, video, audio, sticker)
-    Media { filename: String },
+    /// Media attachment (image, video, audio, sticker), optionally with a caption
+    Media { filename: String, caption: Option<String> },
     /// Message deleted notice
     Deleted { by_sender: bool },
     /// Encryption notice (first message in every chat)

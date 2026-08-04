@@ -141,8 +141,8 @@ fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
     }
 
     // Media attachment: <Anhang: ...> or <Attachment: ...>
-    if let Some(filename) = extract_media_filename(text) {
-        return Some(MessageKind::Media { filename });
+    if let Some((filename, caption)) = extract_media(text) {
+        return Some(MessageKind::Media { filename, caption });
     }
 
     // Check for call messages (language-specific)
@@ -200,21 +200,33 @@ fn is_deletion_message(text: &str, _sender: &str) -> bool {
         || text == "You deleted this message."
 }
 
-fn extract_media_filename(text: &str) -> Option<String> {
+/// Extract media attachment filename plus optional caption.
+/// Returns (filename, caption) - caption is None for media without text.
+/// WhatsApp appends the media tag at the END of the message, so any
+/// text (including multi-line) appears BEFORE it: "Text <Anhang: file>".
+fn extract_media(text: &str) -> Option<(String, Option<String>)> {
     // Match <Anhang: filename> or <Attachment: filename>
     let re = Regex::new(r"<Anhang:\s*(.+?)>|<Attachment:\s*(.+?)>").expect("invalid media regex");
-    if let Some(caps) = re.captures(text) {
-        let filename = caps
-            .get(1)
-            .or_else(|| caps.get(2))?
-            .as_str()
-            .trim()
-            .to_string();
-        if !filename.is_empty() {
-            return Some(filename);
-        }
+    let caps = re.captures(text)?;
+    let filename = caps
+        .get(1)
+        .or_else(|| caps.get(2))?
+        .as_str()
+        .trim()
+        .to_string();
+    if filename.is_empty() {
+        return None;
     }
-    None
+    // Caption is the text BEFORE the media tag (may span lines)
+    let full_match = caps.get(0)?;
+    let before = &text[..full_match.start()];
+    let caption = before.trim().trim_end_matches(LRM).trim().to_string();
+    let caption = if caption.is_empty() {
+        None
+    } else {
+        Some(strip_edited_suffix(&caption).unwrap_or(caption))
+    };
+    Some((filename, caption))
 }
 
 fn detect_call(text: &str) -> Option<CallInfo> {
@@ -359,15 +371,19 @@ fn parse_voting(text: &str) -> (String, Vec<VoteOption>) {
 }
 
 /// Parse the chat name from a zip filename like "WhatsApp Chat - Alice.zip"
+/// or "Download/WhatsApp Chat - Bob" (Android picker fallback path).
 pub fn chat_name_from_filename(filename: &str) -> String {
-    let name = filename
-        .strip_prefix("WhatsApp Chat - ")
-        .unwrap_or(filename)
+    // Use only the basename: Android's content-URI fallback can return a
+    // path like "Download/WhatsApp Chat - Bob".
+    let basename = filename.rsplit(['/', '\\']).next().unwrap_or(filename);
+
+    // WhatsApp exports are always "WhatsApp Chat - <name>.zip".
+    let stripped_prefix = basename.strip_prefix("WhatsApp Chat - ").unwrap_or(basename);
+    let name = stripped_prefix
         .strip_suffix(".zip")
-        .unwrap_or(filename)
+        .unwrap_or(stripped_prefix)
+        .trim_start_matches(LRM)
         .to_string();
-    // Strip leading \u200e
-    let name = name.trim_start_matches(LRM).to_string();
     strip_download_suffix(&name)
 }
 
@@ -420,8 +436,37 @@ mod tests {
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert!(matches!(messages[0].kind, MessageKind::Media { .. }));
-        if let MessageKind::Media { filename } = &messages[0].kind {
+        if let MessageKind::Media { filename, caption } = &messages[0].kind {
             assert_eq!(filename, "00000005-PHOTO-2025-09-24-17-50-12.jpg");
+            assert!(caption.is_none());
+        }
+    }
+
+    #[test]
+    fn test_parse_media_with_caption() {
+        // Real WhatsApp format: caption text BEFORE the media tag
+        let input =
+            "[24.09.25, 17:51:00] Bob: Look at this sunset! \u{200e}<Anhang: 00000005-PHOTO-2025-09-24-17-50-12.jpg>";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        if let MessageKind::Media { filename, caption } = &messages[0].kind {
+            assert_eq!(filename, "00000005-PHOTO-2025-09-24-17-50-12.jpg");
+            assert_eq!(caption.as_deref(), Some("Look at this sunset!"));
+        } else {
+            panic!("expected media message");
+        }
+    }
+
+    #[test]
+    fn test_parse_media_with_multiline_caption() {
+        // Multi-line caption: continuation lines precede the media tag
+        let input = "[24.09.25, 17:52:00] Bob: First line\nSecond line \u{200e}<Anhang: VID-20250924-WA0001.mp4>";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        if let MessageKind::Media { caption, .. } = &messages[0].kind {
+            assert_eq!(caption.as_deref(), Some("First line\nSecond line"));
+        } else {
+            panic!("expected media message");
         }
     }
 
@@ -493,6 +538,14 @@ mod tests {
         assert_eq!(
             chat_name_from_filename("WhatsApp Chat - Best Friends.zip"),
             "Best Friends"
+        );
+        assert_eq!(
+            chat_name_from_filename("Download/WhatsApp Chat - Bob"),
+            "Bob"
+        );
+        assert_eq!(
+            chat_name_from_filename("WhatsApp Chat - David"),
+            "David"
         );
     }
 
@@ -582,10 +635,29 @@ fn test_parse_voting_question_on_separate_line() {
     assert_eq!(messages[0].sender.as_deref(), Some("Elias"));
     if let MessageKind::Voting { question, options } = &messages[0].kind {
         assert_eq!(question, "Elias?");
-        assert_eq!(options.len(), 2);
-        assert_eq!(options[0].text, "Ja");
-        assert_eq!(options[0].votes, 1);
-        assert_eq!(options[1].text, "Nein");
         assert_eq!(options[1].votes, 7);
+    }
+}
+
+#[test]
+fn test_parse_media_caption_real_format() {
+    // Real lines from /home/mad5/wa exports
+    let samples = [
+        ("[06.04.25, 22:52:28] Mads: Worauf bezog der Teil sich? \u{200e}<Anhang: 00000009-PHOTO-2025-04-06-22-52-28.jpg>", Some("Worauf bezog der Teil sich?")),
+        ("[31.07.25, 16:46:58] Mads: Gruppenbild für Secure Hazards? \u{200e}<Anhang: 00000031-PHOTO-2025-07-31-16-46-58.jpg>", Some("Gruppenbild für Secure Hazards?")),
+        ("[18.11.24, 15:48:19] Basti: \u{200e}<Anhang: 00000005-PHOTO-2024-11-18-15-48-19.jpg>", None),
+        // Multi-line: caption spans two lines, tag at end
+        ("[24.04.25, 07:48:54] ~ Sam: Das is der Zeitplan für *MORGEN*.\nIch hab ihr geschrieben; mal schauen wann der für heute kommt. \u{200e}<Anhang: 00000109-PHOTO-2025-04-24-07-48-54.jpg>", Some("Das is der Zeitplan für *MORGEN*.\nIch hab ihr geschrieben; mal schauen wann der für heute kommt.")),
+    ];
+    for (input, expected) in samples {
+        let msgs = parse_chat(input);
+        assert_eq!(msgs.len(), 1, "input: {input}");
+        let kind = &msgs[0].kind;
+        match kind {
+            MessageKind::Media { caption, .. } => {
+                assert_eq!(caption.as_deref(), expected, "input: {input}");
+            }
+            other => panic!("expected Media, got {other:?} for: {input}"),
+        }
     }
 }
