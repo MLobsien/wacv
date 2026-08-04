@@ -10,7 +10,7 @@ use std::thread;
 #[cfg(target_os = "android")]
 mod android;
 mod components;
-mod storage;
+pub mod storage;
 
 use crate::storage::config::Config;
 use components::ChatList;
@@ -297,5 +297,103 @@ fn App() -> Element {
         div { class: "h-screen w-screen flex flex-col {dark_class} bg-gray-100 dark:bg-gray-900 overflow-hidden",
             {content}
         }
+    }
+}
+
+
+#[cfg(not(target_os = "android"))]
+pub fn cli_main() {
+    use crate::storage::ChatStorage;
+    use std::{fs, path::Path};
+
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
+        println!(concat!("wacv import <path>    Import WhatsApp chat export(s). <path> is either a single .zip ",
+                        "file or a directory: in the latter case all .zip files directly inside it (not ",
+                        "subdirectories) are imported."));
+        println!("wacv --help            Show this help");
+        println!("Imported chats appear in the WACV app like those imported via the GUI.");
+        return;
+    }
+
+    if args[1] != "import" {
+        eprintln!("[WACV] unknown command '{}'", args[1]);
+        std::process::exit(2);
+    }
+
+    if args.len() < 3 {
+        eprintln!("[WACV] usage: wacv import <path>");
+        std::process::exit(2);
+    }
+
+    let path = Path::new(&args[2]);
+    let storage = match ChatStorage::new() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[WACV] failed to open storage: {:#}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut zips = Vec::new();
+    if path.is_dir() {
+        match fs::read_dir(path) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file()
+                        && p.extension()
+                            .map(|e| e.eq_ignore_ascii_case("zip"))
+                            .unwrap_or(false)
+                    {
+                        zips.push(p);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[WACV] failed to read directory {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+        zips.sort();
+    } else if path.is_file() {
+        zips.push(path.to_path_buf());
+    } else {
+        eprintln!("[WACV] path doesn't exist: {}", path.display());
+        std::process::exit(1);
+    }
+
+    if zips.is_empty() {
+        eprintln!("[WACV] no .zip files found{}", if path.is_dir() { " in directory" } else { "" });
+        std::process::exit(1);
+    }
+
+    let mut failures = 0;
+    for zip in &zips {
+        let filename = zip
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| zip.display().to_string());
+        let bytes = match fs::read(zip) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[WACV] failed to read {}: {}", filename, e);
+                failures += 1;
+                continue;
+            }
+        };
+        match storage.import_chat(&bytes, &filename) {
+            Ok(chat_name) => println!("[WACV] imported {} -> {}", filename, chat_name),
+            Err(e) => {
+                eprintln!("[WACV] failed to import {}: {:#}", filename, e);
+                failures += 1;
+            }
+        }
+    }
+
+    if failures > 0 {
+        eprintln!("[WACV] {failures} import(s) failed");
+        std::process::exit(1);
     }
 }

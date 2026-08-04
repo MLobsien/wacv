@@ -30,7 +30,15 @@ To avoid misparsed or dropped messages, set the WhatsApp app language to **Engli
 1. Export a chat: WhatsApp → Chat → More → **Export chat** (with or without media).
 2. Import the ZIP via the **Import** button (desktop opens a native file dialog, Android uses the system picker).
 3. Set your display name in **Settings** so your own messages are highlighted in group chats.
+4. Alternatively, import from the terminal with the bundled CLI — see below.
 
+### CLI
+
+```bash
+wacv import <path>     # path = a .zip file, or a directory of .zip files (desktop only)
+wacv --help            # show the CLI's help
+```
+Imports land in the same storage as the GUI, so they appear in the chat list.
 ## Development
 
 ```bash

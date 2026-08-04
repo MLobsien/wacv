@@ -2,6 +2,7 @@
 name = "dioxusmain"
 crate-type = ["cdylib", "rlib"]
 
+
 [package]
 name = "wacv"
 version = "0.1.0"
