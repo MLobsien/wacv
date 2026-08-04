@@ -120,7 +120,7 @@ pub fn ChatView(name: String) -> Element {
                             }
                         });
                     }
-                    MessageKind::Media { filename } => {
+                    MessageKind::Media { filename, caption } => {
                         let is_mine = my_name.as_deref().map_or(false, |my| {
                             msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
                         });
@@ -130,6 +130,7 @@ pub fn ChatView(name: String) -> Element {
                                 is_mine,
                                 chat_name: file_chat_name.clone(),
                                 filename: filename.clone(),
+                                caption: caption.clone(),
                                 time: format_msg_time(msg.timestamp),
                             }
                         });
@@ -317,7 +318,18 @@ fn MessageBubble(
             div { class: "max-w-[75%] shadow-sm {bubble_class} px-3 py-1.5",
                 // Message content - render newlines as <br>
                 div { class: "text-sm text-gray-900 whitespace-pre-wrap break-words",
-                    "{content}"
+                    for part in split_links(&content) {
+                        match part {
+                            TextPart::Text(s) => rsx! { "{s}" },
+                            TextPart::Link(href) => rsx! {
+                                a {
+                                    href: "{href}",
+                                    class: "text-blue-600 underline break-all",
+                                    "{href}"
+                                }
+                            },
+                        }
+                    }
                 }
                 // Footer: edited badge + time
                 div { class: "flex items-center justify-end gap-1 mt-0.5",
@@ -326,17 +338,24 @@ fn MessageBubble(
                     }
                     span { class: "text-[10px] text-gray-400", "{time}" }
                     if is_mine {
-                        // Double check mark
-                        svg {
-                            class: "w-3.5 h-3.5 text-blue-500",
-                            view_box: "0 0 16 11",
-                            fill: "currentColor",
-                            path { d: "M11.071.653a.457.457 0 00-.304-.102.493.493 0 00-.381.178l-6.19 7.636-2.011-2.095a.463.463 0 00-.336-.153.457.457 0 00-.335.128.51.51 0 00-.14.32.484.484 0 00.14.345l2.394 2.493a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
-                            path { d: "M14.931.653a.457.457 0 00-.305-.102.493.493 0 00-.381.178l-6.19 7.636-1.058-1.102a.442.442 0 00-.121-.099.538.538 0 00-.079-.035.398.398 0 00-.286.019.47.47 0 00-.184.145.47.47 0 00-.098.185.475.475 0 00.01.216.44.44 0 00.074.153l1.441 1.502a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
-                        }
+                        DoubleCheck {}
                     }
                 }
             }
+        }
+    }
+}
+
+/// Two blue check marks shown on sent (is_mine) messages
+#[component]
+fn DoubleCheck() -> Element {
+    rsx! {
+        svg {
+            class: "w-3.5 h-3.5 text-blue-500",
+            view_box: "0 0 16 11",
+            fill: "currentColor",
+            path { d: "M11.071.653a.457.457 0 00-.304-.102.493.493 0 00-.381.178l-6.19 7.636-2.011-2.095a.463.463 0 00-.336-.153.457.457 0 00-.335.128.51.51 0 00-.14.32.484.484 0 00.14.345l2.394 2.493a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
+            path { d: "M14.931.653a.457.457 0 00-.305-.102.493.493 0 00-.381.178l-6.19 7.636-1.058-1.102a.442.442 0 00-.121-.099.538.538 0 00-.079-.035.398.398 0 00-.286.019.47.47 0 00-.184.145.47.47 0 00-.098.185.475.475 0 00.01.216.44.44 0 00.074.153l1.441 1.502a.539.539 0 00.16.12.44.44 0 00.186.03.492.492 0 00.37-.184l6.55-8.084a.482.482 0 00.127-.319.5.5 0 00-.15-.345l-.102-.102z" }
         }
     }
 }
@@ -404,9 +423,13 @@ fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Elem
 
 /// Media message (image, video, audio, sticker)
 #[component]
-fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String) -> Element {
-    let bubble_class = if is_mine {
-        "bg-green-200 rounded-[8px_0_8px_8px] self-end shadow-sm"
+fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Option<String>, time: String) -> Element {
+    let is_sticker = filename.contains("STICKER");
+    let bubble_class = if is_sticker {
+        // Stickers render without a bubble background
+        if is_mine { "self-end" } else { "self-start" }
+    } else if is_mine {
+        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end shadow-sm"
     } else {
         "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
     };
@@ -422,31 +445,29 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String
     let is_video = filename.contains("VIDEO") || filename.contains(".mp4");
     let is_audio =
         filename.contains("AUDIO") || filename.contains(".opus") || filename.contains(".ogg");
-    let is_sticker = filename.contains("STICKER");
     let audio_bg = if is_mine { "bg-green-100" } else { "bg-gray-50" };
+    let audio_bg = if is_mine { "bg-green-100" } else { "bg-gray-50" };
+    // Image lightbox (open when the user clicks a photo/sticker)
+    let mut lightbox = use_signal(|| false);
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
-            div { class: "max-w-[75%] overflow-hidden {bubble_class}",
+            div { class: "w-min max-w-[75%] overflow-hidden {bubble_class}",
                 if is_sticker {
                     img {
                         src: "{media_uri}",
-                        class: "w-32 h-32 object-contain",
+                        class: "w-40 h-40 sm:w-64 sm:h-64 max-w-none object-contain cursor-pointer rounded-lg",
+                        onclick: move |_| lightbox.set(true),
                         alt: "",
-                    }
-                    div { class: "px-2 py-1 flex justify-end",
-                        span { class: "text-[10px] text-gray-400", "{time}" }
                     }
                 } else if is_image {
                     div { class: "p-1",
                         img {
                             src: "{media_uri}",
-                            class: "max-w-[50vw] max-h-[50vh] w-auto h-auto object-contain",
+                            class: "max-w-[50vw] max-h-[50vh] w-auto h-auto object-contain cursor-pointer",
+                            onclick: move |_| lightbox.set(true),
                             alt: "",
                         }
-                    }
-                    div { class: "px-2 py-1 flex justify-end",
-                        span { class: "text-[10px] text-gray-400", "{time}" }
                     }
                 } else if is_video {
                     div { class: "p-1",
@@ -456,9 +477,6 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String
                             class: "max-w-[50vw] max-h-[50vh] w-auto h-auto",
                         }
                     }
-                    div { class: "px-2 py-1 flex justify-end",
-                        span { class: "text-[10px] text-gray-400", "{time}" }
-                    }
                 } else if is_audio {
                     div { class: "flex items-center gap-2 px-3 py-2 min-w-[200px] {audio_bg}",
                         audio {
@@ -466,7 +484,6 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String
                             controls: true,
                             class: "h-8 accent-green-600",
                         }
-                        span { class: "text-[10px] text-gray-400 shrink-0", "{time}" }
                     }
                 } else {
                     // Generic document
@@ -476,8 +493,95 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, time: String
                         }
                         div { class: "min-w-0",
                             p { class: "text-xs text-gray-600 truncate", "{filename}" }
-                            span { class: "text-[10px] text-gray-400", "{time}" }
                         }
+                    }
+                }
+                // Caption text (media sent together with a message)
+                if let Some(cap) = caption.as_ref() {
+                    if !cap.is_empty() {
+                        div { class: "px-2 py-1",
+                            p { class: "text-sm text-gray-700 whitespace-pre-wrap [overflow-wrap:anywhere]",
+                                for part in split_links(cap) {
+                                    match part {
+                                        TextPart::Text(s) => rsx! { "{s}" },
+                                        TextPart::Link(href) => rsx! {
+                                            a {
+                                                href: "{href}",
+                                                class: "text-blue-600 underline break-all",
+                                                "{href}"
+                                            }
+                                        },
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Time footer
+                div { class: "px-2 py-1 flex justify-end",
+                    span { class: "text-[10px] text-gray-400", "{time}" }
+                    if is_mine {
+                        DoubleCheck {}
+                    }
+                }
+            }
+        }
+        if lightbox() {
+            ImageModal {
+                uri: media_uri.clone(),
+                caption: caption.clone(),
+                on_close: move |_| lightbox.set(false),
+            }
+        }
+    }
+}
+
+/// Full-screen lightbox for a clicked image/sticker
+#[component]
+fn ImageModal(uri: String, caption: Option<String>, on_close: EventHandler<()>) -> Element {
+
+    let c1 = on_close.clone();
+
+    rsx! {
+        div {
+            id: "image-modal",
+            class: "fixed inset-0 z-50 bg-black/90 flex items-center justify-center",
+            tabindex: "0",
+            autofocus: true,
+            onclick: move |_| on_close.call(()),
+            onkeydown: move |e| {
+                if e.key() == Key::Escape {
+                    on_close.call(());
+                }
+            },
+            // Close button (top-right)
+            button {
+                class: "absolute top-4 right-4 text-white/80 hover:text-white p-2 rounded-full hover:bg-white/10 transition-colors",
+                onclick: move |e| {
+                    e.stop_propagation();
+                    c1.call(());
+                },
+                svg {
+                    class: "w-6 h-6",
+                    fill: "none",
+                    view_box: "0 0 24 24",
+                    stroke: "currentColor",
+                    stroke_width: "2",
+                    path { d: "M6 18L18 6M6 6l12 12", stroke_linecap: "round", stroke_linejoin: "round" }
+                }
+            }
+            // Full-size image
+            img {
+                src: "{uri}",
+                class: "max-w-[95vw] max-h-[85vh] object-contain rounded-lg shadow-2xl",
+                onclick: move |e| e.stop_propagation(),
+            }
+            // Caption below the image
+            if let Some(c) = caption {
+                if !c.is_empty() {
+                    p {
+                        class: "absolute bottom-6 left-1/2 -translate-x-1/2 text-white/90 text-sm whitespace-pre-wrap [overflow-wrap:anywhere] max-w-[85vw] text-center",
+                        "{c}"
                     }
                 }
             }
@@ -523,6 +627,79 @@ fn format_msg_time(ts: i64) -> String {
         .unwrap_or_default()
 }
 
+/// A segment of message text: either plain text or a clickable URL.
+enum TextPart {
+    Text(String),
+    Link(String),
+}
+
+/// Split message text into plain-text and link parts.
+///
+/// Any `http://`/`https://` URL (at a token start, or after an opening
+/// bracket/quote) becomes a `Link`; trailing punctuation is kept as text.
+fn split_links(text: &str) -> Vec<TextPart> {
+    let mut parts = Vec::new();
+    for piece in text.split_inclusive(char::is_whitespace) {
+        let word_end = piece.trim_end_matches(char::is_whitespace).len();
+        let word = &piece[..word_end];
+        let whitespace = &piece[word_end..];
+        if let Some(idx) = find_url_start(word) {
+            let prefix = &word[..idx];
+            let prefix_ok = prefix
+                .chars()
+                .all(|c| matches!(c, '(' | '[' | '{' | '\u{ab}' | '\u{201c}' | '\u{2018}'));
+            if prefix_ok {
+                if !prefix.is_empty() {
+                    parts.push(TextPart::Text(prefix.to_string()));
+                }
+                let url = &word[idx..];
+                let trimmed = url.trim_end_matches(|c: char| {
+                    matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '>' | '\u{201d}' | '\u{2019}' | '\u{2026}')
+                });
+                let (href, tail) = (&url[..trimmed.len()], &url[trimmed.len()..]);
+                parts.push(TextPart::Link(href.to_string()));
+                if !tail.is_empty() {
+                    parts.push(TextPart::Text(tail.to_string()));
+                }
+                if !whitespace.is_empty() {
+                    parts.push(TextPart::Text(whitespace.to_string()));
+                }
+                continue;
+            }
+        }
+        parts.push(TextPart::Text(piece.to_string()));
+    }
+    parts
+}
+
+/// Find the byte index of the first `http://` or `https://` (case-insensitive).
+fn find_url_start(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len() {
+        let is_http = i + 7 <= bytes.len()
+            && bytes[i] | 32 == b'h'
+            && bytes[i + 1] | 32 == b't'
+            && bytes[i + 2] | 32 == b't'
+            && bytes[i + 3] | 32 == b'p'
+            && bytes[i + 4] == b':'
+            && bytes[i + 5] == b'/'
+            && bytes[i + 6] == b'/';
+        let is_https = i + 8 <= bytes.len()
+            && bytes[i] | 32 == b'h'
+            && bytes[i + 1] | 32 == b't'
+            && bytes[i + 2] | 32 == b't'
+            && bytes[i + 3] | 32 == b'p'
+            && bytes[i + 4] | 32 == b's'
+            && bytes[i + 5] == b':'
+            && bytes[i + 6] == b'/'
+            && bytes[i + 7] == b'/';
+        if is_http || is_https {
+            return Some(i);
+        }
+    }
+    None
+}
+
 fn format_date(ts: i64) -> String {
     let now = Local::now();
     let dt = DateTime::from_timestamp(ts, 0).map(|dt| dt.with_timezone(&Local));
@@ -558,7 +735,7 @@ fn day_changed(prev: i64, current: i64) -> bool {
 fn VotingMessage(is_mine: bool, question: String, options: Vec<VoteOption>, time: String) -> Element {
     let container_class = if is_mine { "items-end" } else { "items-start" };
     let bubble_class = if is_mine {
-        "bg-green-200 rounded-[8px_0_8px_8px] self-end"
+        "bg-[#d9fdd3] rounded-[8px_0_8px_8px] self-end"
     } else {
         "bg-white rounded-[0_8px_8px_8px] self-start shadow-md"
     };
