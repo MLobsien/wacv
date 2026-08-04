@@ -191,13 +191,13 @@ mod tests {
     #[test]
     fn test_my_name_chat_named_after_other() {
         let chat = Chat::new(
-            "Anna".into(),
+            "Emma".into(),
             vec![
-                Message { timestamp: 1, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
-                Message { timestamp: 2, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+                Message { timestamp: 1, sender: Some("Emma".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 2, sender: Some("Alex".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
             ],
         );
-        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+        assert_eq!(chat.my_name(), Some("Alex".to_string()));
     }
 
     #[test]
@@ -207,12 +207,12 @@ mod tests {
         let chat = Chat::new(
             "+49 1234".into(),
             vec![
-                Message { timestamp: 1, sender: Some("~\u{202f}Anna".into()), kind: MessageKind::EncryptionNotice },
-                Message { timestamp: 2, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
-                Message { timestamp: 3, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+                Message { timestamp: 1, sender: Some("~\u{202f}Emma".into()), kind: MessageKind::EncryptionNotice },
+                Message { timestamp: 2, sender: Some("Emma".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 3, sender: Some("Alex".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
             ],
         );
-        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+        assert_eq!(chat.my_name(), Some("Alex".to_string()));
     }
 
     #[test]
@@ -222,20 +222,20 @@ mod tests {
         let chat = Chat::new(
             "+49 1234".into(),
             vec![
-                Message { timestamp: 1, sender: Some("Anna".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
-                Message { timestamp: 2, sender: Some("Mads".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
-                Message { timestamp: 3, sender: Some("~\u{202f}Mads".into()), kind: MessageKind::Deleted { by_sender: true } },
+                Message { timestamp: 1, sender: Some("Emma".into()), kind: MessageKind::Text { content: "hi".into(), edited: false } },
+                Message { timestamp: 2, sender: Some("Alex".into()), kind: MessageKind::Text { content: "hey".into(), edited: false } },
+                Message { timestamp: 3, sender: Some("~\u{202f}Alex".into()), kind: MessageKind::Deleted { by_sender: true } },
             ],
         );
-        assert_eq!(chat.my_name(), Some("Mads".to_string()));
+        assert_eq!(chat.my_name(), Some("Alex".to_string()));
     }
 
     #[test]
     fn test_normalize_sender() {
-        assert_eq!(normalize_sender("~\u{202f}Maria"), "Maria");
-        assert_eq!(normalize_sender("~Friedrich Bali"), "Friedrich Bali");
+        assert_eq!(normalize_sender("~\u{202f}Mia"), "Mia");
+        assert_eq!(normalize_sender("~Fred Baker"), "Fred Baker");
         assert_eq!(normalize_sender("\u{200e}Du"), "Du");
-        assert_eq!(normalize_sender("\u{202a}+49 1575 8556595\u{202c}"), "+49 1575 8556595");
-        assert_eq!(normalize_sender("Mads"), "Mads");
+        assert_eq!(normalize_sender("\u{202a}+49 176 1234567\u{202c}"), "+49 176 1234567");
+        assert_eq!(normalize_sender("Alex"), "Alex");
     }
 }

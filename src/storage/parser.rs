@@ -626,28 +626,28 @@ mod tests {
 
 #[test]
 fn test_parse_voting_question_on_separate_line() {
-    // Real format from 11t chat: ABSTIMMUNG: on its own line,
+    // ABSTIMMUNG: on its own line, question on the next line
     // question on next line
-    let input = "[14.06.25, 23:29:09] ~ Elias: ‎ABSTIMMUNG:\nElias?\n\u{200e}OPTION: Ja (1 Stimme)\n\u{200e}OPTION: Nein (7 Stimmen)";
+    let input = "[14.06.25, 23:29:09] ~ Eli: \u{200e}ABSTIMMUNG:\nEli?\n\u{200e}OPTION: Yes (1 Stimme)\n\u{200e}OPTION: No (7 Stimmen)";
     let messages = parse_chat(input);
     assert_eq!(messages.len(), 1);
     assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
-    assert_eq!(messages[0].sender.as_deref(), Some("Elias"));
+    assert_eq!(messages[0].sender.as_deref(), Some("Eli"));
     if let MessageKind::Voting { question, options } = &messages[0].kind {
-        assert_eq!(question, "Elias?");
+        assert_eq!(question, "Eli?");
         assert_eq!(options[1].votes, 7);
     }
 }
 
 #[test]
 fn test_parse_media_caption_real_format() {
-    // Real lines from /home/mad5/wa exports
+    // Multi-line captions with the media tag at the end
     let samples = [
-        ("[06.04.25, 22:52:28] Mads: Worauf bezog der Teil sich? \u{200e}<Anhang: 00000009-PHOTO-2025-04-06-22-52-28.jpg>", Some("Worauf bezog der Teil sich?")),
-        ("[31.07.25, 16:46:58] Mads: Gruppenbild für Secure Hazards? \u{200e}<Anhang: 00000031-PHOTO-2025-07-31-16-46-58.jpg>", Some("Gruppenbild für Secure Hazards?")),
-        ("[18.11.24, 15:48:19] Basti: \u{200e}<Anhang: 00000005-PHOTO-2024-11-18-15-48-19.jpg>", None),
+        ("[06.04.25, 22:52:28] Alex: What was the part referring to? \u{200e}<Anhang: 00000009-PHOTO-2025-04-06-22-52-28.jpg>", Some("What was the part referring to?")),
+        ("[31.07.25, 16:46:58] Alex: Photo for the group project? \u{200e}<Anhang: 00000031-PHOTO-2025-07-31-16-46-58.jpg>", Some("Photo for the group project?")),
+        ("[18.11.24, 15:48:19] Ben: \u{200e}<Anhang: 00000005-PHOTO-2024-11-18-15-48-19.jpg>", None),
         // Multi-line: caption spans two lines, tag at end
-        ("[24.04.25, 07:48:54] ~ Sam: Das is der Zeitplan für *MORGEN*.\nIch hab ihr geschrieben; mal schauen wann der für heute kommt. \u{200e}<Anhang: 00000109-PHOTO-2025-04-24-07-48-54.jpg>", Some("Das is der Zeitplan für *MORGEN*.\nIch hab ihr geschrieben; mal schauen wann der für heute kommt.")),
+        ("[24.04.25, 07:48:54] ~ Sara: Here is the schedule for *TOMORROW*.\nLet me know when it works for you. \u{200e}<Anhang: 00000109-PHOTO-2025-04-24-07-48-54.jpg>", Some("Here is the schedule for *TOMORROW*.\nLet me know when it works for you.")),
     ];
     for (input, expected) in samples {
         let msgs = parse_chat(input);
