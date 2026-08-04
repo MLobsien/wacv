@@ -1,50 +1,42 @@
-# Development
+# WACV — WhatsApp Chat Viewer
 
-Your new bare-bones project includes minimal organization with a single `main.rs` file and a few assets.
+An offline viewer for WhatsApp chat exports, built with Rust and [Dioxus](https://dioxuslabs.com) 0.7. Import a chat export (ZIP), then browse messages, media, calls and polls in a WhatsApp-style UI. Runs on Linux desktop and Android — these are also the only platforms it has been tested on.
 
-```
-project/
-├─ assets/ # Any assets that are used by the app should be placed here
-├─ src/
-│  ├─ main.rs # main.rs is the entry point to your application and currently contains all components for the app
-├─ Cargo.toml # The Cargo.toml file defines the dependencies and feature flags for your project
-```
+## Features
 
-### Automatic Tailwind (Dioxus 0.7+)
+- Import WhatsApp chat exports (ZIP), with or without media
+- Chat list with last-message previews, timestamps and per-chat deletion
+- Rich message rendering: text, photos/videos/audio/stickers, calls, polls, deleted-message placeholders, day separators
+- Click-to-open image lightbox and clickable links
+- Display-name setting for group chats, dark mode
+- Media served locally by an embedded HTTP server (`~/.local/share/wacv/media`)
 
-As of Dioxus 0.7, there no longer is a need to manually install tailwind. Simply `dx serve` and you're good to go!
+## ⚠️ Set WhatsApp to English
 
-Automatic tailwind is supported by checking for a file called `tailwind.css` in your app's manifest directory (next to Cargo.toml). To customize the file, use the dioxus.toml:
+The parser relies on the localized markers WhatsApp writes into chat exports. German variants (`<Anhang: …>`, `ABSTIMMUNG:`, `Sprachanruf`, `Diese Nachricht wurde gelöscht.`) are recognized, but **English is the fully supported baseline** — polls, calls and system messages are matched most reliably in English:
 
-```toml
-[application]
-tailwind_input = "my.css"
-tailwind_output = "assets/out.css" # also customize the location of the out file!
-```
+| Feature | English marker |
+|---|---|
+| Polls | `POLL:` / `OPTION: … (N votes)` |
+| Calls | `Voice call` / `Missed voice call` |
+| Deleted / edited | `This message was deleted.` / `You deleted this message.` / `<This message was edited.>` |
+| Media | `<Attachment: …>` |
+| Encryption notice | `Messages and calls are end-to-end encrypted` |
 
-### Tailwind Manual Install
+To avoid misparsed or dropped messages, set the WhatsApp app language to **English before exporting**: *WhatsApp → Settings → Chats → App language → English*, then export the chat.
 
-To use tailwind plugins or manually customize tailwind, you can can install the Tailwind CLI and use it directly.
+## Usage
 
-### Tailwind
-1. Install npm: https://docs.npmjs.com/downloading-and-installing-node-js-and-npm
-2. Install the Tailwind CSS CLI: https://tailwindcss.com/docs/installation/tailwind-cli
-3. Run the following command in the root of the project to start the Tailwind CSS compiler:
+1. Export a chat: WhatsApp → Chat → More → **Export chat** (with or without media).
+2. Import the ZIP via the **Import** button (desktop opens a native file dialog, Android uses the system picker).
+3. Set your display name in **Settings** so your own messages are highlighted in group chats.
 
-```bash
-npx @tailwindcss/cli -i ./input.css -o ./assets/tailwind.css --watch
-```
-
-### Serving Your App
-
-Run the following command in the root of your project to start developing with the default platform:
+## Development
 
 ```bash
-dx serve
+dx serve                                                         # run the desktop app with hot reload
+cargo test                                                       # run unit tests
+npx @tailwindcss/cli -i ./input.css -o ./assets/tailwind.css     # regenerate Tailwind CSS
 ```
 
-To run for a different platform, use the `--platform platform` flag. E.g.
-```bash
-dx serve --platform desktop
-```
-
+The project uses a Nix dev shell (`nix develop`) on the desktop. Tailwind is configured via `input.css` (custom dark variant) and compiled to `assets/tailwind.css`, which `dx serve` picks up automatically.
