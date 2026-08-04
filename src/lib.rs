@@ -218,7 +218,9 @@ pub fn main() {
 </html>"#.to_string();
 
     let config = dioxus::desktop::Config::new()
-        .with_custom_index(html);
+        .with_custom_index(html)
+        .with_menu(None)
+        .with_window(dioxus::desktop::WindowBuilder::new().with_decorations(false));
 
     dioxus::LaunchBuilder::new().with_cfg(config).launch(App);
 }
