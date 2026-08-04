@@ -309,11 +309,14 @@ pub fn cli_main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
-        println!(concat!("wacv import <path>    Import WhatsApp chat export(s). <path> is either a single .zip ",
-                        "file or a directory: in the latter case all .zip files directly inside it (not ",
-                        "subdirectories) are imported."));
-        println!("wacv --help            Show this help");
-        println!("Imported chats appear in the WACV app like those imported via the GUI.");
+        println!(r#"wacv import <path>    Import WhatsApp chat export(s). <path> is either a single .zip file or a
+                      directory: in the latter case all .zip files directly inside it (not subdirectories) are
+                      imported.
+
+wacv --help            Show this help
+
+Imported chats appear in the WACV app like those imported via the GUI.
+"#);
         return;
     }
 
