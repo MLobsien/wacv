@@ -98,6 +98,8 @@ fn mime_for_extension(filename: &str) -> &'static str {
         "audio/mpeg"
     } else if lower.ends_with(".ogg") || lower.ends_with(".opus") {
         "audio/ogg"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
     } else {
         "application/octet-stream"
     }

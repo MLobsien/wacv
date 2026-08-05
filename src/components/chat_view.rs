@@ -569,7 +569,11 @@ fn MediaMessage(
                             path { d: "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" }
                         }
                         div { class: "min-w-0",
-                            p { class: "text-xs text-gray-600 dark:text-gray-300 truncate", "{filename}" }
+                            a {
+                                href: "{media_uri}",
+                                class: "text-xs text-blue-600 dark:text-blue-400 underline truncate block",
+                                "{filename}"
+                            }
                         }
                     }
                 }
