@@ -88,6 +88,8 @@ fn mime_for_extension(filename: &str) -> &'static str {
         "image/webp"
     } else if lower.ends_with(".mp4") {
         "video/mp4"
+    } else if lower.ends_with(".mov") {
+        "video/quicktime"
     } else if lower.ends_with(".webm") {
         "video/webm"
     } else if lower.ends_with(".mp3") {

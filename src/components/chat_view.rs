@@ -496,7 +496,7 @@ fn MediaMessage(
         || filename.contains(".jpg")
         || filename.contains(".png")
         || filename.contains(".webp");
-    let is_video = filename.contains("VIDEO") || filename.contains(".mp4");
+    let is_video = filename.contains("VIDEO") || filename.contains(".mp4") || filename.contains(".mov");
     let is_audio =
         filename.contains("AUDIO") || filename.contains(".opus") || filename.contains(".ogg");
     let audio_bg = if is_mine { "bg-green-100 dark:bg-green-900" } else { "bg-gray-50 dark:bg-gray-800" };
