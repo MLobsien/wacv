@@ -1,6 +1,8 @@
 use crate::storage::{CallInfo, CallKind, ChatStorage, MessageKind, VoteOption};
 use crate::storage::config::Config;
 use chrono::{DateTime, Local};
+use std::rc::Rc;
+use dioxus::html::geometry::PixelsVector2D;
 use dioxus::prelude::*;
 
 #[component]
@@ -18,6 +20,25 @@ pub fn ChatView(name: String) -> Element {
     // Per-chat menu state (delete chat)
     let mut menu_open = use_signal(|| false);
     let mut confirm_delete = use_signal(|| false);
+    // Scroll container reference; auto-scroll to the newest message once loaded
+    let mut messages_area = use_signal(|| None::<Rc<MountedData>>);
+    use_effect(move || {
+        let loaded = chat.read().as_ref().map_or(false, |c| c.is_some());
+        if !loaded {
+            return;
+        }
+        let Some(area) = messages_area.cloned() else { return };
+        spawn(async move {
+            if let Ok(size) = area.get_scroll_size().await {
+                let _ = area
+                    .scroll(
+                        PixelsVector2D::new(0.0, size.height),
+                        ScrollBehavior::Instant,
+                    )
+                    .await;
+            }
+        });
+    });
     // Compute header content outside rsx!
     let header_content: Element = match &*chat.read() {
         Some(Some(c)) => {
@@ -55,13 +76,13 @@ pub fn ChatView(name: String) -> Element {
             let mut items: Vec<Element> = Vec::new();
             let my_name = config.read().user_name.clone().or_else(|| c.my_name());
 
-            // Render newest first: iterate messages in reverse. Date and sender
-            // grouping still compare against the chronologically next message.
-            for (i, msg) in c.messages.iter().enumerate().rev() {
-                // Show date separator when a new day starts: the current message
-                // is on a different day than the newer message after it.
-                let show_date = if i + 1 < c.messages.len() {
-                    day_changed(msg.timestamp, c.messages[i + 1].timestamp)
+            // Render oldest first. Date and sender grouping compare against the
+            // chronologically previous (older) message; the scroll container is
+            // auto-scrolled to the bottom so the newest message is visible.
+            for (i, msg) in c.messages.iter().enumerate() {
+                // Show date separator if new day (compared to previous message)
+                let show_date = if i > 0 {
+                    day_changed(c.messages[i - 1].timestamp, msg.timestamp)
                 } else {
                     true
                 };
@@ -74,7 +95,7 @@ pub fn ChatView(name: String) -> Element {
 
                 // Show sender name for group chats
                 let show_sender = msg.sender.as_deref() != last_sender.as_deref()
-                    || last_ts - msg.timestamp > 300;
+                    || msg.timestamp - last_ts > 300;
 
                 last_sender = msg.sender.clone();
                 last_ts = msg.timestamp;
@@ -265,6 +286,7 @@ pub fn ChatView(name: String) -> Element {
 
             // Messages area
             div { class: "flex-1 overflow-y-auto px-3 py-2",
+                onmounted: move |e| messages_area.set(Some(e.data())),
                 {messages_content}
             }
         }
