@@ -6,7 +6,7 @@ const LRM: char = '\u{200e}';
 
 /// Parse the _chat.txt content from a WhatsApp export
 pub fn parse_chat(content: &str) -> Vec<Message> {
-    let line_re = Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): (.*)$")
+    let line_re = Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): ?(.*)$")
         .expect("invalid line regex");
 
     let date_re =
@@ -622,6 +622,35 @@ mod tests {
         };
         assert_eq!(msg.preview_text(), "Best option?");
     }
+
+    #[test]
+    fn test_parse_media_empty_header_line() {
+        // WhatsApp exports media-only messages as a header with no text:
+        //   [ts] Sender:
+        //   <Anhang: file>
+        let input = "[02.01.26, 21:02:02] Robin:\n\u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].sender.as_deref(), Some("Robin"));
+        assert!(matches!(messages[0].kind, MessageKind::Media { .. }));
+    }
+
+    #[test]
+    fn test_media_header_not_merged_into_previous() {
+        // A text message followed by a media-only header line must stay separate.
+        let input = "[02.01.26, 22:01:00] Morgan: Burner\n[02.01.26, 21:02:02] Robin:\n\u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        let messages = parse_chat(input);
+        assert_eq!(messages.len(), 2);
+        if let MessageKind::Text { content, .. } = &messages[0].kind {
+            assert_eq!(content, "Burner");
+        } else {
+            panic!("expected text message");
+        }
+        assert_eq!(messages[0].sender.as_deref(), Some("Morgan"));
+        assert_eq!(messages[1].sender.as_deref(), Some("Robin"));
+        assert!(matches!(messages[1].kind, MessageKind::Media { .. }));
+    }
+
 }
 
 #[test]

@@ -147,10 +147,16 @@ pub fn ChatView(name: String) -> Element {
                         let is_mine = my_name.as_deref().map_or(false, |my| {
                             msg.sender.as_deref().map(crate::storage::chat::normalize_sender) == Some(my)
                         });
+                        // Show sender name for group chats (same rule as text messages)
+                        let sender = show_sender
+                            .then(|| msg.sender.clone())
+                            .flatten()
+                            .map(|s| crate::storage::chat::normalize_sender(&s).to_string());
                         let file_chat_name = media_chat_name.clone();
                         items.push(rsx! {
                             MediaMessage {
                                 is_mine,
+                                sender,
                                 chat_name: file_chat_name.clone(),
                                 filename: filename.clone(),
                                 caption: caption.clone(),
@@ -447,7 +453,14 @@ fn CallCard(is_mine: bool, sender: String, info: CallInfo, time: String) -> Elem
 
 /// Media message (image, video, audio, sticker)
 #[component]
-fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Option<String>, time: String) -> Element {
+fn MediaMessage(
+    is_mine: bool,
+    sender: Option<String>,
+    chat_name: String,
+    filename: String,
+    caption: Option<String>,
+    time: String,
+) -> Element {
     let is_sticker = filename.contains("STICKER");
     let bubble_class = if is_sticker {
         // Stickers render without a bubble background
@@ -475,6 +488,11 @@ fn MediaMessage(is_mine: bool, chat_name: String, filename: String, caption: Opt
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
+            // Sender name (for group chats, other people)
+            if let Some(s) = sender {
+                span { class: "text-xs text-gray-500 dark:text-gray-400 ml-1 mb-0.5 font-medium", "{s}" }
+            }
+
             div { class: "w-min max-w-[75%] overflow-hidden {bubble_class}",
                 if is_sticker {
                     img {
