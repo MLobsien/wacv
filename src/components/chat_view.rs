@@ -502,6 +502,13 @@ fn MediaMessage(
     let audio_bg = if is_mine { "bg-green-100 dark:bg-green-900" } else { "bg-gray-50 dark:bg-gray-800" };
     // Image lightbox (open when the user clicks a photo/sticker)
     let mut lightbox = use_signal(|| false);
+    // Track image load state. When an image fails, the browser renders a tiny
+    // broken-image placeholder; with `w-min` on the bubble that placeholder
+    // becomes the min-content width and squashes the caption to a few
+    // characters. So on failure we drop `w-min` and let the text size the
+    // bubble instead.
+    let mut img_failed = use_signal(|| false);
+    let bubble_width_class = if img_failed() { "max-w-[75%]" } else { "w-min max-w-[75%]" };
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
@@ -510,7 +517,7 @@ fn MediaMessage(
                 span { class: "text-xs text-gray-500 dark:text-gray-400 ml-1 mb-0.5 font-medium", "{s}" }
             }
 
-            div { class: "w-min max-w-[75%] overflow-hidden {bubble_class}",
+            div { class: "{bubble_width_class} overflow-hidden {bubble_class}",
                 if is_sticker {
                     img {
                         src: "{media_uri}",
@@ -519,12 +526,24 @@ fn MediaMessage(
                         alt: "",
                     }
                 } else if is_image {
-                    div { class: "p-1",
-                        img {
-                            src: "{media_uri}",
-                            class: "max-w-[50vw] max-h-[50vh] w-auto h-auto object-contain cursor-pointer",
-                            onclick: move |_| lightbox.set(true),
-                            alt: "",
+                    if img_failed() {
+                        // Image could not be loaded: show a small placeholder
+                        // that does not constrain the bubble width, so the
+                        // caption text sizes the bubble instead.
+                        div { class: "p-2",
+                            svg { class: "w-5 h-5 text-gray-400 dark:text-gray-500", fill: "none", view_box: "0 0 24 24", stroke: "currentColor", stroke_width: "2",
+                                path { d: "M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6" }
+                            }
+                        }
+                    } else {
+                        div { class: "p-1",
+                            img {
+                                src: "{media_uri}",
+                                class: "max-w-[50vw] max-h-[50vh] w-auto h-auto object-contain cursor-pointer",
+                                onclick: move |_| lightbox.set(true),
+                                onerror: move |_| img_failed.set(true),
+                                alt: "",
+                            }
                         }
                     }
                 } else if is_video {
