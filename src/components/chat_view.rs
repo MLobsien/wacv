@@ -55,10 +55,13 @@ pub fn ChatView(name: String) -> Element {
             let mut items: Vec<Element> = Vec::new();
             let my_name = config.read().user_name.clone().or_else(|| c.my_name());
 
-            for (i, msg) in c.messages.iter().enumerate() {
-                // Show date separator if new day
-                let show_date = if i > 0 {
-                    day_changed(c.messages[i - 1].timestamp, msg.timestamp)
+            // Render newest first: iterate messages in reverse. Date and sender
+            // grouping still compare against the chronologically next message.
+            for (i, msg) in c.messages.iter().enumerate().rev() {
+                // Show date separator when a new day starts: the current message
+                // is on a different day than the newer message after it.
+                let show_date = if i + 1 < c.messages.len() {
+                    day_changed(msg.timestamp, c.messages[i + 1].timestamp)
                 } else {
                     true
                 };
@@ -71,11 +74,10 @@ pub fn ChatView(name: String) -> Element {
 
                 // Show sender name for group chats
                 let show_sender = msg.sender.as_deref() != last_sender.as_deref()
-                    || msg.timestamp - last_ts > 300;
+                    || last_ts - msg.timestamp > 300;
 
                 last_sender = msg.sender.clone();
                 last_ts = msg.timestamp;
-
                 match &msg.kind {
                     MessageKind::System(text) => {
                         items.push(rsx! {
