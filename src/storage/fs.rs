@@ -192,7 +192,10 @@ fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
     };
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).context("failed to read zip entry")?;
-        let entry_name = file.name().to_string();
+        // WhatsApp writes UTF-8 entry names without the ZIP UTF-8 flag (bit 11).
+        // The `zip` crate then falls back to CP437 and mangles non-ASCII names,
+        // so decode the raw bytes as UTF-8 instead of trusting `name()`.
+        let entry_name = String::from_utf8_lossy(file.name_raw()).into_owned();
         if entry_name == "_chat.txt" {
             file.read_to_string(&mut scan.chat_text)
                 .context("failed to read _chat.txt")?;
@@ -291,13 +294,15 @@ fn find_next_local_header(data: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-/// WhatsApp file names are printable ASCII (digits, `-`, `.`, base64 chars).
-/// Reject random byte sequences that a false signature might produce.
+/// WhatsApp file names are printable (digits, `-`, `.`, base64 chars) but may
+/// contain non-ASCII UTF-8 (umlauts, emoji). Reject obviously bogus names a
+/// false `PK\x03\x04` signature might produce: empty, oversized, directory
+/// entries, or strings with control characters.
 fn plausible_zip_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 255
         && !name.ends_with('/')
-        && name.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+        && name.chars().all(|c| !c.is_control())
 }
 
 /// Inflate a deflate stream starting at `data`, returning the decoded bytes and
@@ -360,5 +365,57 @@ mod tests {
         assert!(scan.chat_text.contains("Alex: Hi"));
         assert_eq!(scan.media.len(), 1);
         assert_eq!(scan.media[0].1, b"fakejpegdata");
+    }
+
+    /// Build a WhatsApp-style zip: a UTF-8 entry name stored WITHOUT the ZIP
+    /// UTF-8 flag (bit 11). The `zip` crate then decodes such names as CP437
+    /// (e.g. `U\u{0308}` bytes `55 CC 88` become `U╠ê`), which is exactly the
+    /// mangling that used to break media file lookups for non-ASCII names.
+    fn make_whatsapp_style_zip() -> Vec<u8> {
+        let cursor = io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(cursor);
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("_chat.txt", opts).unwrap();
+        w.write_all(b"[25.07.25, 10:32:55] Alex: Hi\r\n").unwrap();
+        w.start_file("00000127-Allergen-U\u{0308}bersicht.pdf", opts).unwrap();
+        w.write_all(b"fakepdfdata").unwrap();
+        let mut bytes = w.finish().unwrap().into_inner();
+        // Clear the UTF-8 flag (bit 11, 0x0800) in every local file header
+        // (flags at +6) and central directory entry (flags at +8).
+        let mut i = 0;
+        while i + 4 <= bytes.len() {
+            let sig = &bytes[i..i + 4];
+            let flag_offset = if sig == b"PK\x03\x04" {
+                Some(6)
+            } else if sig == b"PK\x01\x02" {
+                Some(8)
+            } else {
+                None
+            };
+            if let Some(off) = flag_offset {
+                let pos = i + off;
+                let flags = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+                bytes[pos..pos + 2].copy_from_slice(&(flags & !0x0800).to_le_bytes());
+            }
+            i += 1;
+        }
+        bytes
+    }
+
+    #[test]
+    fn central_directory_scan_keeps_utf8_names_without_flag() {
+        let zip = make_whatsapp_style_zip();
+        // The correct, UTF-8-decoded media name must survive the scan.
+        let scan = scan_zip_via_central_directory(&zip).expect("valid zip should parse");
+        assert!(scan.chat_text.contains("Alex: Hi"));
+        assert_eq!(scan.media.len(), 1);
+        assert_eq!(scan.media[0].0, "00000127-Allergen-U\u{0308}bersicht.pdf");
+    }
+
+    #[test]
+    fn local_headers_scan_keeps_utf8_names_without_flag() {
+        let zip = make_whatsapp_style_zip();
+        let scan = scan_zip_via_local_headers(&zip).expect("scan should recover");
+        assert_eq!(scan.media[0].0, "00000127-Allergen-U\u{0308}bersicht.pdf");
     }
 }
