@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// How chats are ordered in the chat list.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ChatSort {
+    /// Sort by the timestamp of the last message (newest first).
+    #[default]
+    #[serde(rename = "by_time")]
+    ByTime,
+    /// Sort alphabetically by chat name.
+    #[serde(rename = "alphabetical")]
+    Alphabetical,
+}
+
 /// Application configuration stored on disk as JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -9,6 +21,9 @@ pub struct Config {
     pub user_name: Option<String>,
     /// Whether the UI uses the dark theme.
     pub dark_mode: bool,
+    /// How chats are ordered in the chat list.
+    #[serde(default)]
+    pub chat_sort: ChatSort,
 }
 
 impl Config {
@@ -48,8 +63,36 @@ impl Config {
     }
 }
 
+
 impl Default for Config {
     fn default() -> Self {
-        Self { user_name: None, dark_mode: false }
+        Self { user_name: None, dark_mode: false, chat_sort: ChatSort::default() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_sort_defaults_to_by_time() {
+        assert_eq!(Config::default().chat_sort, ChatSort::ByTime);
+    }
+
+    #[test]
+    fn old_config_without_chat_sort_still_loads() {
+        // Configs written before the chat_sort field existed must still deserialize.
+        let old = r#"{"user_name": null, "dark_mode": false}"#;
+        let cfg: Config = serde_json::from_str(old).expect("old config should load");
+        assert_eq!(cfg.chat_sort, ChatSort::ByTime);
+    }
+
+    #[test]
+    fn chat_sort_roundtrips_through_json() {
+        let cfg = Config { chat_sort: ChatSort::Alphabetical, ..Config::default() };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.chat_sort, ChatSort::Alphabetical);
+        assert!(json.contains("alphabetical"));
     }
 }

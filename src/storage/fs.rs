@@ -100,6 +100,32 @@ impl ChatStorage {
         Ok(chats)
     }
 
+    /// List chats together with the timestamp of their last message, so the
+    /// UI can sort them by recency. The order is unspecified.
+    pub fn list_chats_with_last_timestamp(&self) -> Result<Vec<(String, i64)>> {
+        let mut chats = Vec::new();
+        if !self.data_dir.exists() {
+            return Ok(chats);
+        }
+        for entry in fs::read_dir(&self.data_dir).context("failed to read data dir")? {
+            let entry = entry.context("failed to read entry")?;
+            if entry.file_type()?.is_dir() {
+                let chat_cbor = entry.path().join("chat.cbor");
+                if chat_cbor.exists() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        let last_ts = self
+                            .load_chat(name)
+                            .ok()
+                            .and_then(|c| c.last_timestamp())
+                            .unwrap_or(0);
+                        chats.push((name.to_string(), last_ts));
+                    }
+                }
+            }
+        }
+        Ok(chats)
+    }
+
     pub fn load_chat(&self, name: &str) -> Result<Chat> {
         let chat_path = self.data_dir.join(name).join("chat.cbor");
         let bytes = fs::read(&chat_path).context(format!("failed to read chat: {}", name))?;

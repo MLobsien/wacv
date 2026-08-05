@@ -1,4 +1,4 @@
-use crate::storage::config::Config;
+use crate::storage::config::{ChatSort, Config};
 use dioxus::prelude::*;
 
 /// Settings page — lets the user configure their display name.
@@ -12,6 +12,12 @@ pub fn Settings() -> Element {
         if config.read().dark_mode { "bg-green-600" } else { "bg-gray-300 dark:bg-gray-600" };
     let knob_class =
         if config.read().dark_mode { "left-[22px]" } else { "left-0.5" };
+    let active_btn = "bg-green-600 text-white";
+    let inactive_btn = "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300";
+    let sort = config.read().chat_sort;
+    let by_time_btn = if sort == ChatSort::ByTime { active_btn } else { inactive_btn };
+    let alpha_btn = if sort == ChatSort::Alphabetical { active_btn } else { inactive_btn };
+    let base_btn = "flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors";
 
     rsx! {
         div { class: "flex flex-col h-full bg-gray-100 dark:bg-gray-900",
@@ -90,8 +96,32 @@ pub fn Settings() -> Element {
                         }
                     }
                 }
-            }
+                div { class: "bg-white dark:bg-gray-800 rounded-lg shadow-sm p-4 mt-4",
+                    h2 { class: "text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3", "Chat List" }
+                    p { class: "text-xs text-gray-500 dark:text-gray-400 mb-3",
+                        "How chats are ordered in the chat list."
+                    }
+                    div { class: "flex gap-2",
+                        button {
+                            class: "{base_btn} {by_time_btn}",
+                            onclick: move |_| {
+                                config.write().chat_sort = ChatSort::ByTime;
+                                config.read().save();
+                            },
+                            "By time"
+                        }
+                        button {
+                            class: "{base_btn} {alpha_btn}",
+                            onclick: move |_| {
+                                config.write().chat_sort = ChatSort::Alphabetical;
+                                config.read().save();
+                            },
+                            "Alphabetical"
+                        }
+                    }
+                }
 
+            }
         }
     }
 }

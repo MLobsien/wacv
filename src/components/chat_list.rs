@@ -53,9 +53,11 @@ fn import_zipped(path: std::path::PathBuf, status: &mut Signal<String>, refresh:
     }
 }
 
-async fn get_chat_list() -> Result<Vec<String>, String> {
+async fn get_chat_list() -> Result<Vec<(String, i64)>, String> {
     let storage = ChatStorage::new().map_err(|e| format!("{:?}", e))?;
-    storage.list_chats().map_err(|e| format!("{:?}", e))
+    storage
+        .list_chats_with_last_timestamp()
+        .map_err(|e| format!("{:?}", e))
 }
 
 #[component]
@@ -68,6 +70,33 @@ pub fn ChatList() -> Element {
         get_chat_list()
     });
     let config = use_context::<Signal<Config>>();
+    let mut search = use_signal(|| String::new());
+
+    // Filter and sort the chat list. Sorting depends on the config setting,
+    // filtering on the search box; both re-run reactively.
+    let visible_chats = use_memo(move || {
+        let list = chat_list.read();
+        let Some(Ok(chats)) = list.as_ref() else {
+            return Vec::new();
+        };
+        let mut chats = chats.clone();
+        let sort = config.read().chat_sort;
+        match sort {
+            crate::storage::config::ChatSort::ByTime => {
+                // Newest last-message first.
+                chats.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            }
+            crate::storage::config::ChatSort::Alphabetical => {
+                chats.sort_by(|a, b| a.0.cmp(&b.0));
+            }
+        }
+        let query = search().trim().to_lowercase();
+        if !query.is_empty() {
+            chats.retain(|(name, _)| name.to_lowercase().contains(&query));
+        }
+        chats
+    });
+
     let has_chats = chat_list
         .read()
         .as_ref()
@@ -93,10 +122,19 @@ pub fn ChatList() -> Element {
                 }
             }
         }
-        Some(Ok(chats)) => {
-            rsx! {
-                for chat_name in chats.iter() {
-                    ChatEntry { key: "{chat_name}", name: chat_name.clone() }
+        Some(Ok(_)) => {
+            let visible = visible_chats();
+            if visible.is_empty() {
+                rsx! {
+                    div { class: "flex items-center justify-center h-full text-gray-400 dark:text-gray-500 p-8 text-center",
+                        p { class: "text-sm", "No chats match your search" }
+                    }
+                }
+            } else {
+                rsx! {
+                    for (chat_name, _) in visible.iter() {
+                        ChatEntry { key: "{chat_name}", name: chat_name.clone() }
+                    }
                 }
             }
         }
@@ -122,6 +160,48 @@ pub fn ChatList() -> Element {
                         "Settings"
                     }
                     span { "to identify your messages" }
+                }
+            }
+            // Search box
+            if has_chats {
+                div { class: "px-4 py-2 border-b border-gray-200 dark:border-gray-800",
+                    div { class: "relative",
+                        svg {
+                            class: "absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500",
+                            fill: "none",
+                            view_box: "0 0 24 24",
+                            stroke: "currentColor",
+                            stroke_width: "2",
+                            path {
+                                d: "M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z",
+                                stroke_linecap: "round",
+                                stroke_linejoin: "round",
+                            }
+                        }
+                        input {
+                            class: "w-full pl-9 pr-8 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 dark:text-gray-100",
+                            placeholder: "Search chats",
+                            value: search(),
+                            oninput: move |e| { search.set(e.value()); },
+                        }
+                        if !search().is_empty() {
+                            button {
+                                class: "absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300",
+                                onclick: move |_| search.set(String::new()),
+                                svg {
+                                    class: "w-3.5 h-3.5",
+                                    fill: "none",
+                                    view_box: "0 0 24 24",
+                                    stroke: "currentColor",
+                                    stroke_width: "2",
+                                    path {
+                                        d: "M6 18L18 6M6 6l12 12",
+                                        stroke_linecap: "round",
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             div { class: "flex-1 overflow-y-auto",
