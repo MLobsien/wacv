@@ -166,8 +166,13 @@ pub fn ChatView(name: String) -> Element {
                     }
                     MessageKind::Deleted { by_sender } => {
                         let is_mine = *by_sender;
+                        // Show sender name for group chats (same rule as text messages)
+                        let sender = show_sender
+                            .then(|| msg.sender.clone())
+                            .flatten()
+                            .map(|s| crate::storage::chat::normalize_sender(&s).to_string());
                         items.push(rsx! {
-                            DeletedMessage { is_mine }
+                            DeletedMessage { is_mine, sender }
                         });
                     }
                     MessageKind::Voting { question, options } => {
@@ -314,8 +319,20 @@ fn DateSeparator(date: String) -> Element {
 fn SystemMessage(text: String) -> Element {
     rsx! {
         div { class: "flex justify-center my-2",
-            span { class: "text-xs text-gray-500 dark:text-gray-400 italic bg-white/60 dark:bg-gray-800/60 px-3 py-1.5 rounded-lg max-w-xs text-center leading-relaxed",
-                "{text}"
+            span {
+                class: "text-xs text-gray-500 dark:text-gray-400 italic bg-white/60 dark:bg-gray-800/60 px-3 py-1.5 rounded-lg max-w-xs text-center leading-relaxed [overflow-wrap:anywhere]",
+                for part in split_links(&text) {
+                    match part {
+                        TextPart::Text(s) => rsx! { "{s}" },
+                        TextPart::Link(href) => rsx! {
+                            a {
+                                href: "{href}",
+                                class: "text-blue-600 dark:text-blue-400 underline break-all",
+                                "{href}"
+                            }
+                        },
+                    }
+                }
             }
         }
     }
@@ -632,7 +649,7 @@ fn ImageModal(uri: String, caption: Option<String>, on_close: EventHandler<()>) 
 
 /// Deleted message placeholder
 #[component]
-fn DeletedMessage(is_mine: bool) -> Element {
+fn DeletedMessage(is_mine: bool, sender: Option<String>) -> Element {
     let container_class = if is_mine { "items-end" } else { "items-start" };
     let text = if is_mine {
         "You deleted this message"
@@ -642,6 +659,10 @@ fn DeletedMessage(is_mine: bool) -> Element {
 
     rsx! {
         div { class: "flex flex-col {container_class} mb-1.5",
+            // Sender name (for group chats, other people)
+            if let Some(s) = sender {
+                span { class: "text-xs text-gray-500 dark:text-gray-400 ml-1 mb-0.5 font-medium", "{s}" }
+            }
             div { class: "max-w-[75%] bg-gray-100 dark:bg-gray-800 rounded-lg px-3 py-2 italic text-gray-400 dark:text-gray-500 text-sm border border-gray-200 dark:border-gray-700",
                 svg {
                     class: "w-3.5 h-3.5 inline mr-1 -mt-0.5",
