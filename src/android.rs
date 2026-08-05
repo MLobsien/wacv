@@ -58,23 +58,30 @@ pub fn is_initialised() -> bool {
     ANDROID_DATA_DIR.get().is_some()
 }
 
-/// Launch the system file picker for application/zip and return (filename, bytes).
+/// Launch the system file picker (multi-select) for application/zip and return
+/// the chosen files as (filename, bytes).
 ///
 /// Spawns the intent on the UI thread via `wry::dispatch()`, then polls for
-/// the content-URI returned through `MainActivity.onActivityResult()`.
-pub fn pick_zip_file() -> Result<(String, Vec<u8>), String> {
+/// the content-URI(s) returned through `MainActivity.onActivityResult()`.
+pub fn pick_zip_files() -> Result<Vec<(String, Vec<u8>)>, String> {
     launch_file_picker_impl()?;
-    let uri = poll_picker_result()?;
-    let bytes = read_uri_content(&uri)?;
+    let raw = poll_picker_result()?;
+    // URIs are joined with \u0001 by the Kotlin side (see FilePickerHelper).
+    let uris: Vec<&str> = raw.split('\u{1}').filter(|u| !u.is_empty()).collect();
+    if uris.is_empty() {
+        return Err("File picker returned no files".to_string());
+    }
 
-    // Best-effort filename: query OpenableColumns.DISPLAY_NAME (the URI's
-    // last segment is often a numeric document id or an encoded path).
-    let fname = display_name_for_uri(&uri);
-    eprintln!(
-        "[WACV] JNI picker got file: {fname} ({} bytes)",
-        bytes.len()
-    );
-    Ok((fname, bytes))
+    let mut files = Vec::with_capacity(uris.len());
+    for uri in uris {
+        let bytes = read_uri_content(uri)?;
+        // Best-effort filename: query OpenableColumns.DISPLAY_NAME (the URI's
+        // last segment is often a numeric document id or an encoded path).
+        let fname = display_name_for_uri(uri);
+        eprintln!("[WACV] JNI picker got file: {fname} ({} bytes)", bytes.len());
+        files.push((fname, bytes));
+    }
+    Ok(files)
 }
 
 /// Store a content-URI returned by the system file picker.

@@ -5315,7 +5315,6 @@ dependencies = [
  "jni",
  "memchr",
  "regex",
- "rfd",
  "serde",
  "serde_cbor",
  "serde_json",

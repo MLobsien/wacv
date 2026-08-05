@@ -1,55 +1,86 @@
 use crate::storage::{ChatStorage, config::Config};
 use dioxus::prelude::*;
-#[cfg(not(target_os = "android"))]
-use rfd::AsyncFileDialog;
 
-/// Desktop: native file dialog via rfd.
+/// Desktop: multi-file picker via zenity.
 #[cfg(not(target_os = "android"))]
-async fn pick_file_dialog() -> Option<std::path::PathBuf> {
-    eprintln!("[WACV] Opening GTK file dialog via rfd...");
-    let handle = AsyncFileDialog::new()
-        .add_filter("ZIP files", &["zip"])
-        .pick_file()
-        .await;
-    let path = handle.as_ref().map(|h| h.path().to_path_buf());
-    eprintln!("[WACV] File dialog result: {:?}", path);
-    path
+fn pick_zip_files_dialog() -> Vec<std::path::PathBuf> {
+    eprintln!("[WACV] Opening zenity multi-file dialog...");
+    let output = std::process::Command::new("zenity")
+        .arg("--file-selection")
+        .arg("--multiple")
+        .arg("--title")
+        .arg("Select WhatsApp chat export(s)")
+        .arg("--file-filter")
+        .arg("ZIP files (*.zip) | *.zip")
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let paths: Vec<std::path::PathBuf> = stdout
+                .split('|')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from)
+                .collect();
+            eprintln!("[WACV] zenity result: {:?}", paths);
+            paths
+        }
+        _ => {
+            eprintln!("[WACV] zenity cancelled or unavailable");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(not(target_os = "android"))]
-fn import_zipped(path: std::path::PathBuf, status: &mut Signal<String>, refresh: &mut Signal<u32>) {
-    eprintln!("[WACV] File: {:?}", path);
-    status.set(format!("Loading {}", path.display()));
-    match std::fs::read(&path) {
-        Ok(data) => {
-            eprintln!("[WACV] Read {}B", data.len());
-            let fname = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("chat.zip")
-                .to_string();
-            match ChatStorage::new() {
-                Ok(storage) => match storage.import_chat(&data, &fname) {
-                    Ok(name) => {
-                        eprintln!("[WACV] Imported: {}", name);
-                        status.set(format!("\u{2713} {} imported", name));
-                        *refresh.write() += 1;
-                    }
+fn import_zipped_many(
+    paths: Vec<std::path::PathBuf>,
+    status: &mut Signal<String>,
+    refresh: &mut Signal<u32>,
+) {
+    let mut imported = 0;
+    let mut failed = 0;
+    for path in paths {
+        eprintln!("[WACV] File: {:?}", path);
+        status.set(format!("Loading {}", path.display()));
+        match std::fs::read(&path) {
+            Ok(data) => {
+                eprintln!("[WACV] Read {}B", data.len());
+                let fname = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("chat.zip")
+                    .to_string();
+                match ChatStorage::new() {
+                    Ok(storage) => match storage.import_chat(&data, &fname) {
+                        Ok(name) => {
+                            eprintln!("[WACV] Imported: {}", name);
+                            imported += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[WACV] Import err: {}", e);
+                            failed += 1;
+                        }
+                    },
                     Err(e) => {
-                        eprintln!("[WACV] Import err: {}", e);
-                        status.set(format!("Error: {}", e));
+                        eprintln!("[WACV] Storage err: {}", e);
+                        failed += 1;
                     }
-                },
-                Err(e) => {
-                    eprintln!("[WACV] Storage err: {}", e);
-                    status.set(format!("Storage: {}", e));
                 }
             }
+            Err(e) => {
+                eprintln!("[WACV] Read err: {}", e);
+                failed += 1;
+            }
         }
-        Err(e) => {
-            eprintln!("[WACV] Read err: {}", e);
-            status.set(format!("Read err: {}", e));
-        }
+    }
+    *refresh.write() += 1;
+    if failed == 0 {
+        status.set(format!("\u{2713} {imported} imported"));
+    } else if imported > 0 {
+        status.set(format!("\u{2713} {imported} imported, {failed} failed"));
+    } else {
+        status.set(format!("Error: import failed"));
     }
 }
 
@@ -228,25 +259,38 @@ fn Header() -> Element {
                 let mut s = status.clone();
                 let mut r = refresh.clone();
                 spawn(async move {
-                    match crate::android::pick_zip_file() {
-                        Ok((fname, data)) => {
-                            s.set(format!("Loading {fname}..."));
-                            match ChatStorage::new() {
-                                Ok(storage) => match storage.import_chat(&data, &fname) {
-                                    Ok(chat_name) => {
-                                        eprintln!("[WACV] Imported: {chat_name}");
-                                        s.set(format!("\u{2713} {chat_name} imported"));
-                                        *r.write() += 1;
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[WACV] Import err: {e}");
-                                        s.set(format!("Error: {e}"));
-                                    }
-                                },
+                    match crate::android::pick_zip_files() {
+                        Ok(files) => {
+                            let storage = match ChatStorage::new() {
+                                Ok(s) => s,
                                 Err(e) => {
                                     eprintln!("[WACV] Storage err: {e}");
                                     s.set(format!("Storage: {e}"));
+                                    return;
                                 }
+                            };
+                            let mut imported = 0;
+                            let mut failed = 0;
+                            for (fname, data) in files {
+                                s.set(format!("Importing {fname}..."));
+                                match storage.import_chat(&data, &fname) {
+                                    Ok(chat_name) => {
+                                        eprintln!("[WACV] Imported: {chat_name}");
+                                        imported += 1;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[WACV] Import err: {e}");
+                                        failed += 1;
+                                    }
+                                }
+                            }
+                            *r.write() += 1;
+                            if failed == 0 {
+                                s.set(format!("\u{2713} {imported} imported"));
+                            } else if imported > 0 {
+                                s.set(format!("\u{2713} {imported} imported, {failed} failed"));
+                            } else {
+                                s.set(format!("Error: import failed"));
                             }
                         }
                         Err(e) => {
@@ -282,10 +326,17 @@ fn Header() -> Element {
                 let mut s = status.clone();
                 let mut r = refresh.clone();
                 spawn(async move {
-                    let file = pick_file_dialog().await;
-                    eprintln!("[WACV] pick_file returned: {:?}", file);
-                    if let Some(path) = file {
-                        import_zipped(path, &mut s, &mut r);
+                    // zenity blocks the calling thread; run it off the Dioxus
+                    // runtime so the UI stays responsive.
+                    let (tx, rx) = futures::channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let paths = pick_zip_files_dialog();
+                        let _ = tx.send(paths);
+                    });
+                    let paths = rx.await.unwrap_or_default();
+                    eprintln!("[WACV] pick_zip_files returned: {:?}", paths);
+                    if !paths.is_empty() {
+                        import_zipped_many(paths, &mut s, &mut r);
                     }
                 });
             },
