@@ -48,22 +48,21 @@ pub fn parse_chat(content: &str) -> Vec<Message> {
         }
     }
 
-    // Second pass: classify each raw message
+    // Second pass: classify each raw message. Messages with empty text
+    // (classify_message returns None) are skipped - WhatsApp emits bare
+    // header lines ("[ts] Sender:") before media, which must not render.
     raw_messages
         .into_iter()
         .filter_map(|(ts_str, sender, text)| {
             let timestamp = parse_timestamp(&ts_str)?;
-            let kind = classify_message(&sender, &text);
+            let kind = classify_message(&sender, &text)?;
             Some(Message {
                 timestamp,
-                sender: kind.as_ref().and_then(|k| match k {
+                sender: match kind {
                     MessageKind::System(_) | MessageKind::EncryptionNotice => None,
                     _ => Some(normalize_sender(&sender).to_string()),
-                }),
-                kind: kind.unwrap_or(MessageKind::Text {
-                    content: text,
-                    edited: false,
-                }),
+                },
+                kind,
             })
         })
         .collect()
@@ -627,8 +626,8 @@ mod tests {
     fn test_parse_media_empty_header_line() {
         // WhatsApp exports media-only messages as a header with no text:
         //   [ts] Sender:
-        //   <Anhang: file>
-        let input = "[02.01.26, 21:02:02] Robin:\n\u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        // followed by the real media line. The empty header must be ignored.
+        let input = "[02.01.26, 21:02:02] Robin:\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender.as_deref(), Some("Robin"));
@@ -637,8 +636,9 @@ mod tests {
 
     #[test]
     fn test_media_header_not_merged_into_previous() {
-        // A text message followed by a media-only header line must stay separate.
-        let input = "[02.01.26, 22:01:00] Morgan: Burner\n[02.01.26, 21:02:02] Robin:\n\u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        // A text message followed by a bare media header line (no text) must
+        // stay separate, and the bare header must not leak into the text.
+        let input = "[02.01.26, 22:01:00] Morgan: Burner\n[02.01.26, 21:02:02] Robin:\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 2);
         if let MessageKind::Text { content, .. } = &messages[0].kind {
