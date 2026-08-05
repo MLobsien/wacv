@@ -12,6 +12,8 @@ edition = "2021"
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router"] }
 zip = "7.0.0"
+flate2 = "1"
+memchr = "2"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 jni = "0.21.0"
 anyhow = "1.0.100"
