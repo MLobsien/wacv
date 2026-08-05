@@ -86,10 +86,12 @@ fn mime_for_extension(filename: &str) -> &'static str {
         "image/png"
     } else if lower.ends_with(".webp") {
         "image/webp"
-    } else if lower.ends_with(".mp4") {
+    } else if lower.ends_with(".mp4") || lower.ends_with(".mov") {
+        // WebKitGTK's isSupportedMediaMIMEType whitelist does not include
+        // video/quicktime, so a .mov sent as such is rejected by <video>.
+        // QuickTime and MP4 share the qtdemux demuxer and the same codec
+        // set, so serving .mov as video/mp4 plays fine.
         "video/mp4"
-    } else if lower.ends_with(".mov") {
-        "video/quicktime"
     } else if lower.ends_with(".webm") {
         "video/webm"
     } else if lower.ends_with(".mp3") {
@@ -437,5 +439,15 @@ mod tests {
     #[test]
     fn url_decode_keeps_invalid_escapes() {
         assert_eq!(url_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn mime_for_extension_covers_media_types() {
+        assert_eq!(mime_for_extension("00000001-PHOTO-2026-01-01.jpg"), "image/jpeg");
+        assert_eq!(mime_for_extension("00000002-VIDEO-2026-01-01.mp4"), "video/mp4");
+        // WebKitGTK rejects video/quicktime, so .mov is served as video/mp4.
+        assert_eq!(mime_for_extension("00000003-VIDEO-2026-01-01.mov"), "video/mp4");
+        assert_eq!(mime_for_extension("00000004-AUDIO-2026-01-01.opus"), "audio/ogg");
+        assert_eq!(mime_for_extension("00000005-STICKER-2026-01-01.webp"), "image/webp");
     }
 }
