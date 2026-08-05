@@ -1,4 +1,16 @@
 @import "tailwindcss";
 @source "../src/";
 
+@font-face {
+	font-family: "WhatsApp Emoji";
+	src: url("/fonts/WhatsAppEmoji.ttf") format("truetype");
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+	html {
+		font-family: ui-sans-serif, system-ui, sans-serif,
+			"WhatsApp Emoji", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+	}
+}

@@ -90,8 +90,6 @@
       gst-libav
     ];
 
-    gstPluginPath = lib.makeSearchPath "lib/gstreamer-1.0" gstPlugins;
-
     RUSTC = pkgs.rust-bin.stable.latest.default.override {
       targets = ["aarch64-linux-android"];
     };
@@ -240,6 +238,9 @@
 
             mkdir -p android/app/src/main/jniLibs/arm64-v8a
             cp target/aarch64-linux-android/release/libdioxusmain.so android/app/src/main/jniLibs/arm64-v8a/libdioxusmain.so
+
+            mkdir -p android/app/src/main/assets/fonts
+            cp ${pkgs.whatsapp-emoji-font}/share/fonts/WhatsAppEmoji.ttf android/app/src/main/assets/fonts/WhatsAppEmoji.ttf
 
             export HOME="$TMPDIR"
             export GRADLE_USER_HOME="$TMPDIR/.gradle"
