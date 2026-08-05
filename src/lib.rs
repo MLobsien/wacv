@@ -52,9 +52,12 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
-/// URL-decode a path segment
+/// URL-decode a path segment. Percent-encoded bytes are collected and then
+/// decoded as a single UTF-8 sequence, so multi-byte characters (emoji in
+/// chat names, accented letters) round-trip correctly instead of being
+/// mangled one byte at a time.
 pub fn url_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut bytes = Vec::with_capacity(s.len());
     let mut chars = s.chars();
 
     while let Some(c) = chars.next() {
@@ -62,14 +65,17 @@ pub fn url_decode(s: &str) -> String {
             let hi = chars.next().and_then(|c| c.to_digit(16));
             let lo = chars.next().and_then(|c| c.to_digit(16));
             match (hi, lo) {
-                (Some(h), Some(l)) => out.push((h << 4 | l) as u8 as char),
-                _ => out.push('%'),
+                (Some(h), Some(l)) => bytes.push((h << 4 | l) as u8),
+                _ => bytes.push(b'%'),
             }
         } else {
-            out.push(c);
+            // Raw (unencoded) character in the path: keep its UTF-8 bytes.
+            let mut buf = [0u8; 4];
+            bytes.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
     }
-    out
+
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn mime_for_extension(filename: &str) -> &'static str {
@@ -146,22 +152,23 @@ fn handle_connection(mut stream: TcpStream) {
         }
     }
 
-    // Decode URL path
-    let decoded_path = url_decode(path);
-    let path_stripped = decoded_path.trim_start_matches('/');
+    // Split the raw path on '/' first, then decode each segment. Splitting
+    // before decoding keeps a percent-encoded slash (%2F) inside a chat name
+    // from being decoded into a real separator.
+    let path_stripped = path.trim_start_matches('/');
     let segments: Vec<&str> = path_stripped.splitn(2, '/').collect();
     if segments.len() < 2 {
         let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
         return;
     }
 
-    let chat_name = segments[0];
-    let filename = segments[1];
-    let file_path = cache_base.join(chat_name).join(filename);
+    let chat_name = url_decode(segments[0]);
+    let filename = url_decode(segments[1]);
+    let file_path = cache_base.join(chat_name).join(&filename);
 
     match std::fs::read(&file_path) {
         Ok(data) => {
-            let mime = mime_for_extension(filename);
+            let mime = mime_for_extension(&filename);
             eprintln!("[WACV] 200: {} ({} bytes, {})", filename, data.len(), mime);
             respond_full(&mut stream, mime, &data);
         }
@@ -398,5 +405,35 @@ Imported chats appear in the WACV app like those imported via the GUI.
     if failures > 0 {
         eprintln!("[WACV] {failures} import(s) failed");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_roundtrip_preserves_multibyte_utf8() {
+        // Emoji in a chat name must survive encode -> decode unchanged.
+        let name = "🎉 Trip to Lisbon";
+        assert_eq!(url_decode(&url_encode(name)), name);
+    }
+
+    #[test]
+    fn url_decode_reassembles_utf8_sequences() {
+        // U+1F600 (😀) is F0 9F 98 80 as UTF-8; decoding the four percent
+        // escapes must rebuild the single code point, not four mojibake chars.
+        assert_eq!(url_decode("%F0%9F%98%80"), "😀");
+    }
+
+    #[test]
+    fn url_encode_escapes_slashes_and_spaces() {
+        assert_eq!(url_encode("a/b c"), "a%2Fb%20c");
+        assert_eq!(url_decode("a%2Fb%20c"), "a/b c");
+    }
+
+    #[test]
+    fn url_decode_keeps_invalid_escapes() {
+        assert_eq!(url_decode("100%"), "100%");
     }
 }
