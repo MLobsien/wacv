@@ -707,8 +707,9 @@ fn DeletedMessage(is_mine: bool, sender: Option<String>) -> Element {
 // --- Helper functions ---
 
 fn format_msg_time(ts: i64) -> String {
+    // The stored timestamp already represents the local wall-clock time.
     DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.with_timezone(&Local).format("%H:%M").to_string())
+        .map(|dt| dt.format("%H:%M").to_string())
         .unwrap_or_default()
 }
 
@@ -787,7 +788,7 @@ fn find_url_start(s: &str) -> Option<usize> {
 
 fn format_date(ts: i64) -> String {
     let now = Local::now();
-    let dt = DateTime::from_timestamp(ts, 0).map(|dt| dt.with_timezone(&Local));
+    let dt = DateTime::from_timestamp(ts, 0);
 
     match dt {
         Some(dt) => {
@@ -804,9 +805,8 @@ fn format_date(ts: i64) -> String {
 }
 
 fn day_changed(prev: i64, current: i64) -> bool {
-    let prev_dt = DateTime::from_timestamp(prev, 0).map(|dt| dt.with_timezone(&Local).date_naive());
-    let curr_dt =
-        DateTime::from_timestamp(current, 0).map(|dt| dt.with_timezone(&Local).date_naive());
+    let prev_dt = DateTime::from_timestamp(prev, 0).map(|dt| dt.date_naive());
+    let curr_dt = DateTime::from_timestamp(current, 0).map(|dt| dt.date_naive());
 
     match (prev_dt, curr_dt) {
         (Some(p), Some(c)) => p != c,

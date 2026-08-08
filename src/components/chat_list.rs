@@ -453,19 +453,20 @@ fn ChatEntry(name: String) -> Element {
 }
 
 fn format_timestamp(ts: i64) -> String {
-    let now = chrono::Utc::now().timestamp();
+    // Stored timestamps are local wall-clock interpreted as UTC; compare
+    // against the current local wall-clock interpreted the same way.
+    let now = chrono::Local::now().naive_local().and_utc().timestamp();
     let dt = chrono::DateTime::from_timestamp(ts, 0);
 
     match dt {
         Some(dt) => {
-            let local = dt.with_timezone(&chrono::Local);
             let diff_days = (now - ts) / 86400;
             if diff_days == 0 {
-                local.format("%H:%M").to_string()
+                dt.format("%H:%M").to_string()
             } else if diff_days < 7 {
-                local.format("%a").to_string()
+                dt.format("%a").to_string()
             } else {
-                local.format("%d.%m.%y").to_string()
+                dt.format("%d.%m.%y").to_string()
             }
         }
         None => String::new(),

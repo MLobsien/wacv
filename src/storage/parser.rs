@@ -1,61 +1,63 @@
 use crate::storage::chat::*;
-use chrono::NaiveDateTime;
 use regex::Regex;
+use std::sync::LazyLock;
 
 const LRM: char = '\u{200e}';
 
-/// Parse the _chat.txt content from a WhatsApp export
+static MEDIA_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<Anhang:\s*(.+?)>|<Attachment:\s*(.+?)>").expect("invalid media regex")
+});
+static DURATION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\d+)\s*(Min|min|Sek|sek)").expect("invalid duration regex")
+});
+static EDITED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\u{200e}<Diese Nachricht wurde bearbeitet\.>\s*$|\u{200e}<This message was edited\.>\s*$",
+    )
+    .expect("invalid edited regex")
+});
+static OPTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\u{200E}OPTION:\s*(.*?)\s*\((\d+)\s*\S+\)\s*$").expect("invalid option regex")
+});
+
+/// Parse the _chat.txt content from a WhatsApp export.
+///
+/// Message boundaries are "\r\n"; multi-line message text keeps bare "\n"
+/// inside the message, so splitting on "\r\n" yields exactly one chunk per
+/// message with no leftover line endings.
 pub fn parse_chat(content: &str) -> Vec<Message> {
-    let line_re = Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\] (.+?): ?(.*)$")
-        .expect("invalid line regex");
+    // (timestamp, sender, text, attachment_hint)
+    let mut raw_messages: Vec<(i64, String, String, bool)> = Vec::new();
 
-    let date_re =
-        Regex::new(r"^\[(\d{2}\.\d{2}\.\d{2}, \d{2}:\d{2}:\d{2})\]").expect("invalid date regex");
+    for line in content.split("\r\n") {
+        if line.is_empty() {
+            continue;
+        }
 
-    // First pass: collect raw lines, handling multi-line messages
-    let mut raw_messages: Vec<(String, String, String)> = Vec::new();
+        // An LRM directly before the timestamp marks an attachment message.
+        let attachment_hint = line.starts_with(LRM);
+        let line = line.trim_start_matches(LRM);
 
-    for line in content.lines() {
-        // Strip leading \u200e that sometimes precedes the timestamp
-        let trimmed = line.trim_start_matches(LRM);
+        // Parse the leading "[DD.MM.YY, HH:MM:SS]" from the fixed offsets.
+        let Some((timestamp, header_len)) = parse_timestamp(line) else {
+            continue;
+        };
+        let body = &line[header_len..];
 
-        if let Some(caps) = line_re.captures(trimmed) {
-            let ts = caps[1].to_string();
-            let sender = caps[2].to_string();
-            let text = caps[3].to_string();
-            raw_messages.push((ts, sender, text));
-        } else if let Some(caps) = date_re.captures(trimmed) {
-            // Timestamp found but no sender:message pattern — likely empty message
-            let ts = caps[1].to_string();
-            let rest = &trimmed[caps[0].len()..];
-            if let Some(sep_pos) = rest.find(": ") {
-                let sender = rest[..sep_pos].to_string();
-                let text = rest[sep_pos + 2..].to_string();
-                raw_messages.push((ts, sender, text));
-            } else {
-                // Continuation of previous message if no sender found
-                if let Some(last) = raw_messages.last_mut() {
-                    last.2.push('\n');
-                    last.2.push_str(line);
-                }
-            }
-        } else {
-            // Continuation of multi-line message
-            if let Some(last) = raw_messages.last_mut() {
-                last.2.push('\n');
-                last.2.push_str(line);
-            }
+        if let Some(sep) = body.find(':') {
+            let sender = body[..sep].trim().to_string();
+            let text = body[sep + 1..].trim_start_matches(' ').to_string();
+            raw_messages.push((timestamp, sender, text, attachment_hint));
         }
     }
 
-    // Second pass: classify each raw message. Messages with empty text
-    // (classify_message returns None) are skipped - WhatsApp emits bare
-    // header lines ("[ts] Sender:") before media, which must not render.
+    // Classify each message. Messages with empty text or a media-omitted
+    // placeholder (classify_message returns None) are skipped - WhatsApp emits
+    // bare header lines ("[ts] Sender:") before media, which must not render.
     raw_messages
         .into_iter()
-        .filter_map(|(ts_str, sender, text)| {
-            let timestamp = parse_timestamp(&ts_str)?;
-            let kind = classify_message(&sender, &text)?;
+        .filter_map(|(timestamp, sender, text, attachment_hint)| {
+            let kind = classify_message(&text, attachment_hint)?;
             Some(Message {
                 timestamp,
                 sender: match kind {
@@ -68,66 +70,54 @@ pub fn parse_chat(content: &str) -> Vec<Message> {
         .collect()
 }
 
-fn parse_timestamp(ts: &str) -> Option<i64> {
-    // Format: "DD.MM.YY, HH:MM:SS"
-    // chrono expects "YY-MM-DD HH:MM:SS"
-    let normalized = ts.replace('.', "-").replace(',', "").trim().to_string();
-
-    // Parse with year-first format for NaiveDateTime
-    // Input is "DD-MM-YY HH:MM:SS"
-    let parts: Vec<&str> = normalized.splitn(3, '-').collect();
-    if parts.len() < 3 {
+/// Parse the leading "[DD.MM.YY, HH:MM:SS]" from fixed byte offsets.
+/// Returns the wall-clock time as a Unix timestamp (UTC interpretation) and
+/// the header length. No regex, no chrono: WhatsApp already writes the
+/// local time, so the parsed integers are used as-is.
+fn parse_timestamp(line: &str) -> Option<(i64, usize)> {
+    // "[DD.MM.YY, HH:MM:SS]" is exactly 20 bytes.
+    const HEADER: usize = 20;
+    let b = line.as_bytes();
+    if b.len() < HEADER || b[0] != b'[' || b[19] != b']'
+        || b[3] != b'.' || b[6] != b'.' || b[9] != b',' || b[10] != b' '
+        || b[13] != b':' || b[16] != b':'
+    {
         return None;
     }
-    let day = parts[0];
-    let month = parts[1];
-    let rest = parts[2]; // "YY HH:MM:SS"
-
-    let rest_parts: Vec<&str> = rest.splitn(2, ' ').collect();
-    if rest_parts.len() < 2 {
-        return None;
-    }
-    let year = rest_parts[0];
-    let time = rest_parts[1];
-
-    // Convert 2-digit year to 4-digit
-    let year_full = if let Ok(y) = year.parse::<i32>() {
-        if y < 100 {
-            2000 + y
+    let num = |i: usize| -> Option<u32> {
+        if b[i].is_ascii_digit() && b[i + 1].is_ascii_digit() {
+            Some(((b[i] - b'0') as u32) * 10 + (b[i + 1] - b'0') as u32)
         } else {
-            y
+            None
         }
-    } else {
-        return None;
     };
-
-    let _formatted = format!(
-        "{:04}-{:02}-{} {} {}",
-        year_full,
-        month.parse::<i32>().unwrap_or(0),
-        day,
-        time,
-        "00"
-    );
-    // Actually simpler: just parse DD.MM.YY HH:MM:SS directly with custom parsing
-    let naive = NaiveDateTime::parse_from_str(
-        &format!(
-            "{:02}.{:02}.{:04} {}",
-            day.parse::<u32>().unwrap_or(1),
-            month.parse::<u32>().unwrap_or(1),
-            year_full,
-            time
-        ),
-        "%d.%m.%Y %H:%M:%S",
-    )
-    .ok()?;
-
-    Some(naive.and_utc().timestamp())
+    let day = num(1)?;
+    let month = num(4)?;
+    let yy = num(7)?;
+    let hour = num(11)?;
+    let minute = num(14)?;
+    let second = num(17)?;
+    let year = 2000 + yy as i32; // WhatsApp exports 2-digit years
+    let days = days_from_civil(year, month as i32, day as i32);
+    Some((
+        days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64,
+        HEADER,
+    ))
 }
 
-fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
-    let text_stripped = text.trim_start_matches(LRM).trim();
-    let text_clean = text_stripped.trim();
+/// Days since 1970-01-01 (Howard Hinnant's civil calendar algorithm).
+fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {
+    let y = (y - if m <= 2 { 1 } else { 0 }) as i64;
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = ((m + 9) % 12) as u32; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d as u32 - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy as i64; // [0, 146096]
+    era * 146097 + doe - 719468
+}
+
+fn classify_message(text: &str, attachment_hint: bool) -> Option<MessageKind> {
+    let text_clean = text.trim_start_matches(LRM).trim();
 
     // Empty message
     if text_clean.is_empty() {
@@ -135,13 +125,20 @@ fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
     }
 
     // Encryption notice (always starts with LRM in the text)
-    if text.contains(LRM) && is_encryption_notice(text_clean) {
+    if is_encryption_notice(text_clean) {
         return Some(MessageKind::EncryptionNotice);
     }
 
     // Media attachment: <Anhang: ...> or <Attachment: ...>
     if let Some((filename, caption)) = extract_media(text) {
         return Some(MessageKind::Media { filename, caption });
+    }
+
+    // An LRM directly before the timestamp marks an attachment message. If
+    // no media tag was found, the media was omitted from the export
+    // ("Bild weggelassen") - drop it just like an empty message.
+    if attachment_hint {
+        return None;
     }
 
     // Check for call messages (language-specific)
@@ -160,7 +157,7 @@ fn classify_message(sender: &str, text: &str) -> Option<MessageKind> {
         let system_text = text.trim_start_matches(LRM).trim().to_string();
 
         // Check for deletion messages
-        if is_deletion_message(&system_text, sender) {
+        if is_deletion_message(&system_text) {
             let by_sender = system_text.contains("Du hast") || system_text.contains("You deleted");
             return Some(MessageKind::Deleted { by_sender });
         }
@@ -192,7 +189,7 @@ fn is_encryption_notice(text: &str) -> bool {
         || text.starts_with("Messages and calls are end-to-end encrypted")
 }
 
-fn is_deletion_message(text: &str, _sender: &str) -> bool {
+fn is_deletion_message(text: &str) -> bool {
     text == "Diese Nachricht wurde gelöscht."
         || text == "Du hast diese Nachricht gelöscht."
         || text == "This message was deleted."
@@ -205,8 +202,7 @@ fn is_deletion_message(text: &str, _sender: &str) -> bool {
 /// text (including multi-line) appears BEFORE it: "Text <Anhang: file>".
 fn extract_media(text: &str) -> Option<(String, Option<String>)> {
     // Match <Anhang: filename> or <Attachment: filename>
-    let re = Regex::new(r"<Anhang:\s*(.+?)>|<Attachment:\s*(.+?)>").expect("invalid media regex");
-    let caps = re.captures(text)?;
+    let caps = MEDIA_RE.captures(text)?;
     let filename = caps
         .get(1)
         .or_else(|| caps.get(2))?
@@ -246,17 +242,14 @@ fn detect_call(text: &str) -> Option<CallInfo> {
         let is_missed = text.contains("Verpasster") || text.contains("Missed");
         let no_answer = text.contains("Keine Antwort") || text.contains("No answer");
 
-        let kind = if is_missed {
-            CallKind::Missed
-        } else if no_answer {
+        let kind = if is_missed || no_answer {
             CallKind::Missed
         } else {
             CallKind::Incoming
         };
 
         // Try to extract duration
-        let duration_re = Regex::new(r"(\d+)\s*(Min|min|Sek|sek)").expect("invalid duration regex");
-        let duration_secs = duration_re.captures(text).and_then(|caps| {
+        let duration_secs = DURATION_RE.captures(text).and_then(|caps| {
             let num: u64 = caps[1].parse().ok()?;
             let unit = caps[2].to_lowercase();
             match unit.as_str() {
@@ -265,7 +258,6 @@ fn detect_call(text: &str) -> Option<CallInfo> {
                 _ => None,
             }
         });
-
         return Some(CallInfo {
             kind,
             duration_secs,
@@ -278,25 +270,11 @@ fn detect_call(text: &str) -> Option<CallInfo> {
 fn strip_edited_suffix(text: &str) -> Option<String> {
     // Edited messages end with LRM + "<Diese Nachricht wurde bearbeitet.>"
     // or LRM + "<This message was edited.>"
-    let edited_re = Regex::new(
-        r"\u{200e}<Diese Nachricht wurde bearbeitet\.>\s*$|\u{200e}<This message was edited\.>\s*$",
-    )
-    .expect("invalid edited regex");
-
-    if edited_re.is_match(text) {
-        let base = edited_re.replace(text, "").trim().to_string();
+    if EDITED_RE.is_match(text) {
+        let base = EDITED_RE.replace(text, "").trim().to_string();
         return Some(base);
     }
 
-    // Also try without LRM
-    let edited_re2 =
-        Regex::new(r"<Diese Nachricht wurde bearbeitet\.>\s*$|<This message was edited\.>\s*$")
-            .expect("invalid edited regex2");
-
-    if edited_re2.is_match(text) {
-        let base = edited_re2.replace(text, "").trim().to_string();
-        return Some(base);
-    }
 
     None
 }
@@ -325,26 +303,14 @@ fn parse_voting(text: &str) -> (String, Vec<VoteOption>) {
 
     // Match OPTION lines: LRM + OPTION: text (N words)
     // Where "words" is any language variant (votes, Stimmen, vote, Stimme, etc.)
-    let option_re = Regex::new(r"^\u{200e}OPTION:\s*(.*?)\s*\((\d+)\s*\S+\)\s*$")
-        .expect("invalid option regex");
-
     for line in text.lines() {
         if line.trim().contains('\u{200e}') && line.trim().contains("OPTION:") {
             in_options = true;
-            if let Some(caps) = option_re.captures(line.trim()) {
+            if let Some(caps) = OPTION_RE.captures(line.trim()) {
                 options.push(VoteOption {
                     text: caps[1].to_string(),
                     votes: caps[2].parse().unwrap_or(0),
                 });
-            } else {
-                // Fallback: everything after "OPTION: " prefix
-                if let Some(idx) = line.trim().find("OPTION:") {
-                    let after = line.trim()[idx + "OPTION:".len()..].trim().to_string();
-                    options.push(VoteOption {
-                        text: after,
-                        votes: 0,
-                    });
-                }
             }
         } else if !in_options {
             let cleaned = line.trim_start_matches(LRM).trim();
@@ -417,6 +383,8 @@ mod tests {
             panic!("expected text message");
         }
         assert_eq!(messages[0].sender.as_deref(), Some("Alice"));
+        // Wall-clock time parsed as-is (no timezone shift): 2024-10-08 23:08:02
+        assert_eq!(messages[0].timestamp, 1_728_428_882);
     }
 
     #[test]
@@ -445,12 +413,12 @@ mod tests {
     fn test_parse_media_with_caption() {
         // Real WhatsApp format: caption text BEFORE the media tag
         let input =
-            "[24.09.25, 17:51:00] Bob: Look at this sunset! \u{200e}<Anhang: 00000005-PHOTO-2025-09-24-17-50-12.jpg>";
+            "[24.09.25, 17:51:00] Bob: Caption text here \u{200e}<Anhang: 00000005-PHOTO-2025-09-24-17-50-12.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         if let MessageKind::Media { filename, caption } = &messages[0].kind {
             assert_eq!(filename, "00000005-PHOTO-2025-09-24-17-50-12.jpg");
-            assert_eq!(caption.as_deref(), Some("Look at this sunset!"));
+            assert_eq!(caption.as_deref(), Some("Caption text here"));
         } else {
             panic!("expected media message");
         }
@@ -564,9 +532,9 @@ mod tests {
     #[test]
     fn test_parse_voting_german() {
         let input = "[15.06.25, 10:30:00] Alice: ABSTIMMUNG: What is your favorite color?
-\u{200e}OPTION: Red (5 Stimmen)
-\u{200e}OPTION: Blue (3 Stimmen)
-\u{200e}OPTION: Green (1 Stimme)";
+\u{200e}OPTION: Option A (5 Stimmen)
+\u{200e}OPTION: Option B (3 Stimmen)
+\u{200e}OPTION: Option C (1 Stimme)";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
@@ -574,11 +542,11 @@ mod tests {
         if let MessageKind::Voting { question, options } = &messages[0].kind {
             assert_eq!(question, "What is your favorite color?");
             assert_eq!(options.len(), 3);
-            assert_eq!(options[0].text, "Red");
+            assert_eq!(options[0].text, "Option A");
             assert_eq!(options[0].votes, 5);
-            assert_eq!(options[1].text, "Blue");
+            assert_eq!(options[1].text, "Option B");
             assert_eq!(options[1].votes, 3);
-            assert_eq!(options[2].text, "Green");
+            assert_eq!(options[2].text, "Option C");
             assert_eq!(options[2].votes, 1);
         }
     }
@@ -586,16 +554,16 @@ mod tests {
     #[test]
     fn test_parse_voting_english() {
         let input = "[15.06.25, 11:00:00] Bob: POLL: Best day?
-\u{200e}OPTION: Monday (10 votes)
-\u{200e}OPTION: Tuesday (2 votes)";
+\u{200e}OPTION: Option A (10 votes)
+\u{200e}OPTION: Option B (2 votes)";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         if let MessageKind::Voting { question, options } = &messages[0].kind {
             assert_eq!(question, "Best day?");
             assert_eq!(options.len(), 2);
-            assert_eq!(options[0].text, "Monday");
+            assert_eq!(options[0].text, "Option A");
             assert_eq!(options[0].votes, 10);
-            assert_eq!(options[1].text, "Tuesday");
+            assert_eq!(options[1].text, "Option B");
             assert_eq!(options[1].votes, 2);
         }
     }
@@ -627,7 +595,7 @@ mod tests {
         // WhatsApp exports media-only messages as a header with no text:
         //   [ts] Sender:
         // followed by the real media line. The empty header must be ignored.
-        let input = "[02.01.26, 21:02:02] Robin:\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        let input = "[02.01.26, 21:02:02] Robin:\r\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender.as_deref(), Some("Robin"));
@@ -638,7 +606,7 @@ mod tests {
     fn test_media_header_not_merged_into_previous() {
         // A text message followed by a bare media header line (no text) must
         // stay separate, and the bare header must not leak into the text.
-        let input = "[02.01.26, 22:01:00] Morgan: Burner\n[02.01.26, 21:02:02] Robin:\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
+        let input = "[02.01.26, 22:01:00] Morgan: Burner\r\n[02.01.26, 21:02:02] Robin:\r\n[02.01.26, 21:02:02] Robin: \u{200e}<Anhang: 00000055-PHOTO-2026-01-02-21-02-02.jpg>";
         let messages = parse_chat(input);
         assert_eq!(messages.len(), 2);
         if let MessageKind::Text { content, .. } = &messages[0].kind {
@@ -657,13 +625,13 @@ mod tests {
 fn test_parse_voting_question_on_separate_line() {
     // ABSTIMMUNG: on its own line, question on the next line
     // question on next line
-    let input = "[14.06.25, 23:29:09] ~ Eli: \u{200e}ABSTIMMUNG:\nEli?\n\u{200e}OPTION: Yes (1 Stimme)\n\u{200e}OPTION: No (7 Stimmen)";
+    let input = "[14.06.25, 23:29:09] ~ Eli: \u{200e}ABSTIMMUNG:\nQuestion text?\n\u{200e}OPTION: Option A (1 Stimme)\n\u{200e}OPTION: Option B (7 Stimmen)";
     let messages = parse_chat(input);
     assert_eq!(messages.len(), 1);
     assert!(matches!(messages[0].kind, MessageKind::Voting { .. }));
     assert_eq!(messages[0].sender.as_deref(), Some("Eli"));
     if let MessageKind::Voting { question, options } = &messages[0].kind {
-        assert_eq!(question, "Eli?");
+        assert_eq!(question, "Question text?");
         assert_eq!(options[1].votes, 7);
     }
 }
@@ -672,11 +640,11 @@ fn test_parse_voting_question_on_separate_line() {
 fn test_parse_media_caption_real_format() {
     // Multi-line captions with the media tag at the end
     let samples = [
-        ("[06.04.25, 22:52:28] Alex: What was the part referring to? \u{200e}<Anhang: 00000009-PHOTO-2025-04-06-22-52-28.jpg>", Some("What was the part referring to?")),
-        ("[31.07.25, 16:46:58] Alex: Photo for the group project? \u{200e}<Anhang: 00000031-PHOTO-2025-07-31-16-46-58.jpg>", Some("Photo for the group project?")),
+        ("[06.04.25, 22:52:28] Alex: Caption one. \u{200e}<Anhang: 00000009-PHOTO-2025-04-06-22-52-28.jpg>", Some("Caption one.")),
+        ("[31.07.25, 16:46:58] Alex: Caption two. \u{200e}<Anhang: 00000031-PHOTO-2025-07-31-16-46-58.jpg>", Some("Caption two.")),
         ("[18.11.24, 15:48:19] Ben: \u{200e}<Anhang: 00000005-PHOTO-2024-11-18-15-48-19.jpg>", None),
         // Multi-line: caption spans two lines, tag at end
-        ("[24.04.25, 07:48:54] ~ Sara: Here is the schedule for *TOMORROW*.\nLet me know when it works for you. \u{200e}<Anhang: 00000109-PHOTO-2025-04-24-07-48-54.jpg>", Some("Here is the schedule for *TOMORROW*.\nLet me know when it works for you.")),
+        ("[24.04.25, 07:48:54] ~ Sara: First caption line.\nSecond caption line. \u{200e}<Anhang: 00000109-PHOTO-2025-04-24-07-48-54.jpg>", Some("First caption line.\nSecond caption line.")),
     ];
     for (input, expected) in samples {
         let msgs = parse_chat(input);
@@ -689,4 +657,30 @@ fn test_parse_media_caption_real_format() {
             other => panic!("expected Media, got {other:?} for: {input}"),
         }
     }
+}
+
+#[test]
+fn test_timestamp_is_wall_clock_as_utc() {
+    // WhatsApp writes local wall-clock times. The parser stores them as
+    // though they were UTC so the epoch equals the wall clock: the value
+    // corresponds to the written time interpreted in UTC (no shift).
+    let samples = [
+        ("[08.10.24, 23:08:02] Alice: hi", 1_728_428_882),
+        ("[27.08.22, 08:32:14] Bob: hi", 1_661_589_134),
+        ("[24.04.25, 07:48:54] Carol: hi", 1_745_480_934),
+    ];
+    for (input, expected) in samples {
+        let msgs = parse_chat(input);
+        assert_eq!(msgs.len(), 1, "input: {input}");
+        assert_eq!(msgs[0].timestamp, expected, "input: {input}");
+    }
+}
+
+#[test]
+fn test_parse_media_omitted_placeholder_skipped() {
+    // LRM + "Bild weggelassen" (media omitted from the export) carries no
+    // browsable content - it must be skipped like an empty message.
+    let input = "\u{200e}[03.12.24, 14:50:03] ~\u{202f}Sender: \u{200e}Bild weggelassen";
+    let messages = parse_chat(input);
+    assert!(messages.is_empty());
 }
