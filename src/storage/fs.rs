@@ -74,8 +74,7 @@ impl ChatStorage {
         fs::create_dir_all(&chat_dir).context("failed to create chat dir")?;
 
         let bytes = serde_cbor::to_vec(chat).context("failed to serialize chat")?;
-        fs::write(chat_dir.join("chat.cbor"), &bytes)
-            .context("failed to write chat.cbor")?;
+        fs::write(chat_dir.join("chat.cbor"), &bytes).context("failed to write chat.cbor")?;
 
         Ok(())
     }
@@ -129,20 +128,22 @@ impl ChatStorage {
     pub fn load_chat(&self, name: &str) -> Result<Chat> {
         let chat_path = self.data_dir.join(name).join("chat.cbor");
         let bytes = fs::read(&chat_path).context(format!("failed to read chat: {}", name))?;
-        let chat: Chat =
-            serde_cbor::from_slice(&bytes).context(format!("failed to deserialize chat: {}", name))?;
+        let chat: Chat = serde_cbor::from_slice(&bytes)
+            .context(format!("failed to deserialize chat: {}", name))?;
         Ok(chat)
     }
 
     pub fn delete_chat(&self, name: &str) -> Result<()> {
         let chat_dir = self.data_dir.join(name);
         if chat_dir.exists() {
-            fs::remove_dir_all(&chat_dir).context(format!("failed to delete chat dir: {}", name))?;
+            fs::remove_dir_all(&chat_dir)
+                .context(format!("failed to delete chat dir: {}", name))?;
         }
         // Media lives alongside chats, so remove it too.
         let media_dir = self.media_dir.join(name);
         if media_dir.exists() {
-            fs::remove_dir_all(&media_dir).context(format!("failed to delete media dir: {}", name))?;
+            fs::remove_dir_all(&media_dir)
+                .context(format!("failed to delete media dir: {}", name))?;
         }
         Ok(())
     }
@@ -160,22 +161,34 @@ impl ChatStorage {
     fn get_data_dir() -> Result<PathBuf> {
         #[cfg(target_os = "android")]
         if let Some(dir) = crate::android::android_data_dir() {
-            eprintln!("[WACV] get_data_dir: android path={:?}", dir.join("wacv").join("chats"));
+            eprintln!(
+                "[WACV] get_data_dir: android path={:?}",
+                dir.join("wacv").join("chats")
+            );
             return Ok(dir.join("wacv").join("chats"));
         }
         let base = dirs::data_dir().context("failed to get data dir")?;
-        eprintln!("[WACV] get_data_dir: desktop path={:?}", base.join("wacv").join("chats"));
+        eprintln!(
+            "[WACV] get_data_dir: desktop path={:?}",
+            base.join("wacv").join("chats")
+        );
         Ok(base.join("wacv").join("chats"))
     }
 
     fn get_media_dir() -> Result<PathBuf> {
         #[cfg(target_os = "android")]
         if let Some(dir) = crate::android::android_data_dir() {
-            eprintln!("[WACV] get_media_dir: android path={:?}", dir.join("wacv").join("media"));
+            eprintln!(
+                "[WACV] get_media_dir: android path={:?}",
+                dir.join("wacv").join("media")
+            );
             return Ok(dir.join("wacv").join("media"));
         }
         let base = dirs::data_dir().context("failed to get data dir")?;
-        eprintln!("[WACV] get_media_dir: desktop path={:?}", base.join("wacv").join("media"));
+        eprintln!(
+            "[WACV] get_media_dir: desktop path={:?}",
+            base.join("wacv").join("media")
+        );
         Ok(base.join("wacv").join("media"))
     }
 }
@@ -183,8 +196,8 @@ impl ChatStorage {
 /// Scan a zip using its central directory (strict).
 fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
     let cursor = io::Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| anyhow::anyhow!("invalid zip: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| anyhow::anyhow!("invalid zip: {}", e))?;
 
     let mut scan = ZipScan {
         chat_text: String::new(),
@@ -201,7 +214,8 @@ fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
                 .context("failed to read _chat.txt")?;
         } else if !entry_name.starts_with('.') && !entry_name.ends_with('/') {
             let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes).context("failed to read zip entry")?;
+            file.read_to_end(&mut bytes)
+                .context("failed to read zip entry")?;
             scan.media.push((entry_name, bytes));
         }
     }
@@ -246,7 +260,8 @@ fn scan_zip_via_local_headers(zip_bytes: &[u8]) -> Result<ZipScan> {
             pos += 4;
             continue;
         }
-        let name = String::from_utf8_lossy(&zip_bytes[name_start..name_start + name_len]).into_owned();
+        let name =
+            String::from_utf8_lossy(&zip_bytes[name_start..name_start + name_len]).into_owned();
         if !plausible_zip_name(&name) {
             pos += 4;
             continue;
@@ -268,7 +283,10 @@ fn scan_zip_via_local_headers(zip_bytes: &[u8]) -> Result<ZipScan> {
         // Streaming entries (flag bit 3) append a data descriptor after the
         // compressed data: signature + crc + sizes. Skip it so the next loop
         // iteration lands exactly on the next local header.
-        if flags & 0x0008 != 0 && pos + 4 <= zip_bytes.len() && zip_bytes[pos..pos + 4] == [0x50, 0x4b, 0x07, 0x08] {
+        if flags & 0x0008 != 0
+            && pos + 4 <= zip_bytes.len()
+            && zip_bytes[pos..pos + 4] == [0x50, 0x4b, 0x07, 0x08]
+        {
             pos += 16; // 4-byte signature + crc(4) + compressed size(4) + uncompressed size(4)
         }
 
@@ -287,7 +305,11 @@ fn scan_zip_via_local_headers(zip_bytes: &[u8]) -> Result<ZipScan> {
 fn find_next_local_header(data: &[u8], from: usize) -> Option<usize> {
     for idx in memchr::memchr_iter(0x50, &data[from..]) {
         let abs = from + idx;
-        if abs + 4 <= data.len() && data[abs + 1] == 0x4b && data[abs + 2] == 0x03 && data[abs + 3] == 0x04 {
+        if abs + 4 <= data.len()
+            && data[abs + 1] == 0x4b
+            && data[abs + 2] == 0x03
+            && data[abs + 3] == 0x04
+        {
             return Some(abs);
         }
     }
@@ -336,7 +358,8 @@ mod tests {
         let mut w = zip::ZipWriter::new(cursor);
         let opts = zip::write::SimpleFileOptions::default();
         w.start_file("_chat.txt", opts).unwrap();
-        w.write_all(b"[25.07.25, 10:32:55] Alex: Hi\r\n[25.07.25, 10:33:00] Emma: Bye\r\n").unwrap();
+        w.write_all(b"[25.07.25, 10:32:55] Alex: Hi\r\n[25.07.25, 10:33:00] Emma: Bye\r\n")
+            .unwrap();
         w.start_file("00000001-pic.jpg", opts).unwrap();
         w.write_all(b"fakejpegdata").unwrap();
         w.finish().unwrap().into_inner()
@@ -358,7 +381,10 @@ mod tests {
         // (local file headers + data). This simulates a WhatsApp export whose
         // central directory is missing or inconsistent.
         let cd_marker = [0x50, 0x4b, 0x01, 0x02];
-        let cd_pos = zip.windows(4).position(|w| w == cd_marker).expect("CD marker");
+        let cd_pos = zip
+            .windows(4)
+            .position(|w| w == cd_marker)
+            .expect("CD marker");
         let truncated = &zip[..cd_pos];
 
         let scan = scan_zip_via_local_headers(truncated).expect("scan should recover");
@@ -377,7 +403,8 @@ mod tests {
         let opts = zip::write::SimpleFileOptions::default();
         w.start_file("_chat.txt", opts).unwrap();
         w.write_all(b"[25.07.25, 10:32:55] Alex: Hi\r\n").unwrap();
-        w.start_file("00000127-Allergen-U\u{0308}bersicht.pdf", opts).unwrap();
+        w.start_file("00000127-Allergen-U\u{0308}bersicht.pdf", opts)
+            .unwrap();
         w.write_all(b"fakepdfdata").unwrap();
         let mut bytes = w.finish().unwrap().into_inner();
         // Clear the UTF-8 flag (bit 11, 0x0800) in every local file header
