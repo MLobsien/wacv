@@ -1,5 +1,4 @@
 use dioxus::prelude::*;
-#[cfg(target_os = "android")]
 use futures::StreamExt;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -16,6 +15,7 @@ use crate::storage::config::Config;
 use components::ChatList;
 use components::ChatView;
 use components::Settings;
+use components::{ImportMsg, ImportRowUi};
 
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 
@@ -255,6 +255,63 @@ fn App() -> Element {
     let config = use_signal(|| Config::load());
     eprintln!("[WACV] App() rendered, loading config...");
     use_context_provider(|| config);
+
+    // ── Import progress stream ────────────────────────────
+    // The import workers (desktop + Android) stream ImportMsg through the
+    // coroutine channel. Keeping the receiver + signals here at the App root
+    // means the progress UI survives navigating to ChatView/Settings and back;
+    // a route-scoped coroutine would be dropped with its Header/ChatList.
+    let refresh = use_signal(|| 0u32);
+    let import_rows = use_signal(|| Vec::<ImportRowUi>::new());
+    let status = use_signal(|| String::new());
+    use_context_provider(|| refresh);
+    use_context_provider(|| import_rows);
+    use_context_provider(|| status.clone());
+
+    // The coroutine body runs on the dioxus main thread and touches signals;
+    // worker threads only ever send ImportMsg through the Send-safe sender.
+    use_coroutine(move |mut rx: UnboundedReceiver<ImportMsg>| async move {
+        let mut rows = import_rows.clone();
+        let mut st = status.clone();
+        let mut refr = refresh.clone();
+        while let Some(msg) = rx.next().await {
+            match msg {
+                ImportMsg::Started { name } => {
+                    st.set(format!("Importing {name}..."));
+                    rows.write().push(ImportRowUi { name, fraction: 0.0 });
+                }
+                ImportMsg::Progress { name, fraction } => {
+                    if let Some(row) = rows.write().iter_mut().find(|r| r.name == name) {
+                        row.fraction = fraction;
+                    }
+                }
+                ImportMsg::Done { name, ok, error } => {
+                    if !ok {
+                        st.set(format!("Failed: {name}: {}", error.unwrap_or_default()));
+                    }
+                    // Remove the finished bar; the chat list will now show
+                    // the real chat entry instead.
+                    rows.write().retain(|r| r.name != name);
+                    *refr.write() += 1;
+                }
+                ImportMsg::AllDone { imported, failed, error } => {
+                    rows.set(Vec::new());
+                    *refr.write() += 1;
+                    if let Some(e) = error {
+                        st.set(format!("Error: {e}"));
+                    } else if imported == 0 && failed == 0 {
+                        st.set(String::new());
+                    } else if failed == 0 {
+                        st.set(format!("\u{2713} {imported} imported"));
+                    } else if imported > 0 {
+                        st.set(format!("\u{2713} {imported} imported, {failed} failed"));
+                    } else {
+                        st.set("Error: import failed".to_string());
+                    }
+                }
+            }
+        }
+    });
 
     // On Android, eagerly init JNI so config/data paths are available before
     // the user interacts with the app. Rendering is gated on completion so

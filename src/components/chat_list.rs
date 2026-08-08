@@ -1,7 +1,7 @@
 use crate::storage::{ChatStorage, config::Config};
 use dioxus::prelude::*;
 
-/// Desktop: multi-file picker via zenity.
+/// Desktop: multi-file picker via zenity (rfd's GTK dialog never opens here).
 #[cfg(not(target_os = "android"))]
 fn pick_zip_files_dialog() -> Vec<std::path::PathBuf> {
     eprintln!("[WACV] Opening zenity multi-file dialog...");
@@ -32,56 +32,76 @@ fn pick_zip_files_dialog() -> Vec<std::path::PathBuf> {
     }
 }
 
+/// Messages streamed from the import worker thread into the UI coroutine.
+/// The worker only sends; all signal writes happen inside `use_coroutine`
+/// (signals are not thread-safe to touch from a raw `std::thread`).
+pub(crate) enum ImportMsg {
+    /// A new chat import has started.
+    /// A new chat import has started.
+    Started { name: String },
+    /// Fractional progress (0..1) for the named chat.
+    Progress { name: String, fraction: f32 },
+    /// A single chat finished (or failed).
+    Done { name: String, ok: bool, error: Option<String> },
+    /// The whole batch finished; refresh the chat list and show a summary.
+    AllDone { imported: usize, failed: usize, error: Option<String> },
+}
+
+/// UI state for one chat's loading bar.
+#[derive(Clone, PartialEq)]
+pub(crate) struct ImportRowUi {
+    pub(crate) name: String,
+    pub(crate) fraction: f32,
+}
+
+/// Desktop worker entry point: import already-picked files on a background
+/// thread, streaming progress back through the UI channel.
 #[cfg(not(target_os = "android"))]
-fn import_zipped_many(
-    paths: Vec<std::path::PathBuf>,
-    status: &mut Signal<String>,
-    refresh: &mut Signal<u32>,
-) {
-    let mut imported = 0;
-    let mut failed = 0;
+fn import_zip_files(tx: futures::channel::mpsc::UnboundedSender<ImportMsg>, paths: Vec<std::path::PathBuf>) {
+    eprintln!("[WACV] importing {} file(s): {:?}", paths.len(), paths);
+    let mut imported = 0usize;
+    let mut failed = 0usize;
     for path in paths {
         eprintln!("[WACV] File: {:?}", path);
-        status.set(format!("Loading {}", path.display()));
+        let fname = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("chat.zip")
+            .to_string();
+        let _ = tx.unbounded_send(ImportMsg::Started { name: fname.clone() });
         match std::fs::read(&path) {
             Ok(data) => {
                 eprintln!("[WACV] Read {}B", data.len());
-                let fname = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("chat.zip")
-                    .to_string();
                 match ChatStorage::new() {
-                    Ok(storage) => match storage.import_chat(&data, &fname) {
+                    Ok(storage) => match storage.import_chat_with_progress(&data, &fname, &mut |p| {
+                        let _ = tx.unbounded_send(ImportMsg::Progress { name: fname.clone(), fraction: p });
+                    }) {
                         Ok(name) => {
-                            eprintln!("[WACV] Imported: {}", name);
+                            eprintln!("[WACV] Imported: {name}");
                             imported += 1;
+                            let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: true, error: None });
                         }
                         Err(e) => {
-                            eprintln!("[WACV] Import err: {}", e);
+                            eprintln!("[WACV] Import err: {e}");
                             failed += 1;
+                            let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: false, error: Some(e.to_string()) });
                         }
                     },
                     Err(e) => {
-                        eprintln!("[WACV] Storage err: {}", e);
+                        eprintln!("[WACV] Storage err: {e}");
                         failed += 1;
+                        let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: false, error: Some(e.to_string()) });
                     }
                 }
             }
             Err(e) => {
-                eprintln!("[WACV] Read err: {}", e);
+                eprintln!("[WACV] Read err: {e}");
                 failed += 1;
+                let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: false, error: Some(e.to_string()) });
             }
         }
     }
-    *refresh.write() += 1;
-    if failed == 0 {
-        status.set(format!("\u{2713} {imported} imported"));
-    } else if imported > 0 {
-        status.set(format!("\u{2713} {imported} imported, {failed} failed"));
-    } else {
-        status.set(format!("Error: import failed"));
-    }
+    let _ = tx.unbounded_send(ImportMsg::AllDone { imported, failed, error: None });
 }
 
 async fn get_chat_list() -> Result<Vec<(String, i64)>, String> {
@@ -94,8 +114,8 @@ async fn get_chat_list() -> Result<Vec<(String, i64)>, String> {
 #[component]
 pub fn ChatList() -> Element {
     let nav = use_navigator();
-    let refresh = use_signal(|| 0u32);
-    use_context_provider(|| refresh);
+    let refresh = use_context::<Signal<u32>>();
+    let import_rows = use_context::<Signal<Vec<ImportRowUi>>>();
     let chat_list = use_resource(move || {
         let _ = refresh();
         get_chat_list()
@@ -236,6 +256,24 @@ pub fn ChatList() -> Element {
                 }
             }
             div { class: "flex-1 overflow-y-auto",
+                if !import_rows().is_empty() {
+                    div { class: "border-b border-gray-200 dark:border-gray-800 px-4 py-2 space-y-2 bg-white dark:bg-gray-900",
+                        for row in &import_rows() {
+                            div { class: "flex items-center gap-3",
+                                div { class: "flex-1 min-w-0",
+                                    div { class: "text-sm text-gray-700 dark:text-gray-300 truncate", "{row.name}" }
+                                    div { class: "mt-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden",
+                                        div {
+                                            class: "h-full bg-green-500 transition-all duration-200",
+                                            style: "width: {((row.fraction * 100.0) as u32)}%",
+                                        }
+                                    }
+                                }
+                                span { class: "text-xs text-gray-500 dark:text-gray-400 shrink-0 w-10 text-right", "{((row.fraction * 100.0) as u32)}%" }
+                            }
+                        }
+                    }
+                }
                 {list_content}
             }
         }
@@ -244,9 +282,17 @@ pub fn ChatList() -> Element {
 
 #[component]
 fn Header() -> Element {
-    let refresh = use_context::<Signal<u32>>();
-    let mut status = use_signal(|| String::new());
+    // status is written by the Android picker (set), read-only on desktop.
+    #[allow(unused_mut)]
+    let mut status = use_context::<Signal<String>>();
     let nav = use_navigator();
+    #[cfg(target_os = "android")]
+    #[allow(unused_mut)]
+    let mut import_rows = use_context::<Signal<Vec<ImportRowUi>>>();
+
+    // The import coroutine lives at the App root (lib.rs) so its receiver
+    // survives route changes; Header just sends messages through its handle.
+    let import_coro = use_coroutine_handle::<ImportMsg>();
 
     // ── Import button: platform-specific ─────────────────
     #[cfg(target_os = "android")]
@@ -255,47 +301,65 @@ fn Header() -> Element {
             class: "flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-green-700 dark:text-green-400 rounded-full text-sm font-medium hover:bg-green-50 dark:hover:bg-gray-700 transition-colors shadow-sm cursor-pointer",
             onclick: move |_| {
                 eprintln!("[WACV] Import clicked");
+                import_rows.set(Vec::new());
                 status.set("Opening JNI picker...".to_string());
-                let mut s = status.clone();
-                let mut r = refresh.clone();
-                spawn(async move {
+                let tx = import_coro.tx();
+                // All file picking + import work happens on a worker thread;
+                // the UI only receives ImportMsg streamed across the channel.
+                std::thread::spawn(move || {
                     match crate::android::pick_zip_files() {
                         Ok(files) => {
+                            let mut imported = 0usize;
+                            let mut failed = 0usize;
                             let storage = match ChatStorage::new() {
                                 Ok(s) => s,
                                 Err(e) => {
                                     eprintln!("[WACV] Storage err: {e}");
-                                    s.set(format!("Storage: {e}"));
+                                    let _ = tx.unbounded_send(ImportMsg::AllDone {
+                                        imported: 0,
+                                        failed: 1,
+                                        error: Some(e.to_string()),
+                                    });
                                     return;
                                 }
                             };
-                            let mut imported = 0;
-                            let mut failed = 0;
-                            for (fname, data) in files {
-                                s.set(format!("Importing {fname}..."));
-                                match storage.import_chat(&data, &fname) {
+                            for (fname, uri) in files {
+                                eprintln!("[WACV] Importing {fname}...");
+                                let _ = tx.unbounded_send(ImportMsg::Started { name: fname.clone() });
+                                // Stage the archive on disk first (only ever
+                                // holds a 64 KiB chunk in RAM while copying),
+                                // then stream the import straight from the file.
+                                let tmp = crate::android::temp_import_path(&fname);
+                                let result = crate::android::copy_uri_content_to_file(&uri, &tmp, &mut |p| {
+                                    // Download phase: first 10% of the bar.
+                                    let _ = tx.unbounded_send(ImportMsg::Progress { name: fname.clone(), fraction: 0.10 * p });
+                                })
+                                .map_err(|e| anyhow::anyhow!("stage {fname}: {e}"))
+                                .and_then(|_| {
+                                    // Import phase: remaining 90% of the bar.
+                                    storage.import_chat_file_with_progress(&tmp, &fname, &mut |f| {
+                                        let _ = tx.unbounded_send(ImportMsg::Progress { name: fname.clone(), fraction: 0.10 + 0.90 * f });
+                                    })
+                                });
+                                let _ = std::fs::remove_file(&tmp);
+                                match result {
                                     Ok(chat_name) => {
                                         eprintln!("[WACV] Imported: {chat_name}");
                                         imported += 1;
+                                        let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: true, error: None });
                                     }
                                     Err(e) => {
                                         eprintln!("[WACV] Import err: {e}");
                                         failed += 1;
+                                        let _ = tx.unbounded_send(ImportMsg::Done { name: fname, ok: false, error: Some(e.to_string()) });
                                     }
                                 }
                             }
-                            *r.write() += 1;
-                            if failed == 0 {
-                                s.set(format!("\u{2713} {imported} imported"));
-                            } else if imported > 0 {
-                                s.set(format!("\u{2713} {imported} imported, {failed} failed"));
-                            } else {
-                                s.set(format!("Error: import failed"));
-                            }
+                            let _ = tx.unbounded_send(ImportMsg::AllDone { imported, failed, error: None });
                         }
                         Err(e) => {
                             eprintln!("[WACV] JNI picker error: {e}");
-                            s.set(format!("Error: {e}"));
+                            let _ = tx.unbounded_send(ImportMsg::AllDone { imported: 0, failed: 0, error: Some(e.to_string()) });
                         }
                     }
                 });
@@ -319,25 +383,21 @@ fn Header() -> Element {
     #[cfg(not(target_os = "android"))]
     let import_button = rsx! {
         button {
-            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-green-700 dark:text-green-400 rounded-full text-sm font-medium hover:bg-green-50 dark:hover:bg-gray-700 transition-colors shadow-sm",
+            class: "flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-gray-800 text-green-700 dark:text-green-400 rounded-full text-sm font-medium hover:bg-green-50 dark:hover:bg-green-700 transition-colors shadow-sm cursor-pointer",
             onclick: move |_| {
-                eprintln!("[WACV] Import clicked");
-                status.set("Opening dialog...".to_string());
-                let mut s = status.clone();
-                let mut r = refresh.clone();
-                spawn(async move {
-                    // zenity blocks the calling thread; run it off the Dioxus
-                    // runtime so the UI stays responsive.
-                    let (tx, rx) = futures::channel::oneshot::channel();
-                    std::thread::spawn(move || {
-                        let paths = pick_zip_files_dialog();
-                        let _ = tx.send(paths);
-                    });
-                    let paths = rx.await.unwrap_or_default();
-                    eprintln!("[WACV] pick_zip_files returned: {:?}", paths);
-                    if !paths.is_empty() {
-                        import_zipped_many(paths, &mut s, &mut r);
+                // zenity blocks until the dialog closes; run the pick plus
+                // the imports on a worker thread and stream progress back
+                // through the coroutine channel. Signals are only touched
+                // on the dioxus thread inside the coroutine.
+                let tx = import_coro.tx();
+                std::thread::spawn(move || {
+                    let paths = pick_zip_files_dialog();
+                    if paths.is_empty() {
+                        // Cancelled: tell the coroutine to clear the status.
+                        let _ = tx.unbounded_send(ImportMsg::AllDone { imported: 0, failed: 0, error: None });
+                        return;
                     }
+                    import_zip_files(tx, paths);
                 });
             },
             svg {

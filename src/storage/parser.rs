@@ -61,7 +61,11 @@ pub fn parse_chat(content: &str) -> Vec<Message> {
             Some(Message {
                 timestamp,
                 sender: match kind {
-                    MessageKind::System(_) | MessageKind::EncryptionNotice => None,
+                    // System notices carry no user; keep the sender on the
+                    // encryption notice: WhatsApp attributes it to the other
+                    // participant, which `Chat::my_name` uses to identify the
+                    // contact in a 1:1 chat.
+                    MessageKind::System(_) => None,
                     _ => Some(normalize_sender(&sender).to_string()),
                 },
                 kind,

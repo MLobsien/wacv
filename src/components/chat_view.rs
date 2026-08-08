@@ -97,8 +97,13 @@ pub fn ChatView(name: String) -> Element {
                 let show_sender = msg.sender.as_deref() != last_sender.as_deref()
                     || msg.timestamp - last_ts > 300;
 
-                last_sender = msg.sender.clone();
-                last_ts = msg.timestamp;
+                // Sync the grouping state only for rendered messages. Hidden
+                // kinds (encryption notice) must not displace the real sender
+                // label of the next visible message.
+                if !matches!(msg.kind, MessageKind::EncryptionNotice) {
+                    last_sender = msg.sender.clone();
+                    last_ts = msg.timestamp;
+                }
                 match &msg.kind {
                     MessageKind::System(text) => {
                         items.push(rsx! {

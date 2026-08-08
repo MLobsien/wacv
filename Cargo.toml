@@ -26,10 +26,11 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 dirs = "6"
 futures = "0.3"
 
-# Desktop uses the zenity multi-file dialog (spawned via std::process::Command).
-
 [target.'cfg(target_os = "android")'.dependencies]
 wry = "0.53"
+
+## Desktop uses the zenity multi-file dialog (spawned via std::process::Command);
+## rfd's GTK dialog does not open a window on this setup.
 
 [features]
 default = ["desktop"]

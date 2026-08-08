@@ -36,23 +36,37 @@ impl ChatStorage {
     /// malformed (some WhatsApp exports have incomplete central directories),
     /// falls back to scanning the local file headers directly.
     pub fn import_chat(&self, zip_bytes: &[u8], filename: &str) -> Result<String> {
+        self.import_chat_with_progress(zip_bytes, filename, &mut |_| {})
+    }
+
+    /// Like [`Self::import_chat`] but reports a normalized 0..1 progress
+    /// value through `report` as the import advances through its phases.
+    ///
+    ///  - 0.00..=0.42  scanning the zip (central directory or local headers)
+    ///  - 0.42..=0.72  writing media files
+    ///  - 0.72..=0.92  parsing messages
+    ///  - 0.92..=1.00  serializing and saving
+    pub fn import_chat_with_progress<F: FnMut(f32)>(&self, zip_bytes: &[u8], filename: &str, report: &mut F) -> Result<String> {
         let chat_name = chat_name_from_filename(filename);
         let chat_media = self.media_dir.join(&chat_name);
         fs::create_dir_all(&chat_media).context("failed to create chat media dir")?;
 
-        let scan = match scan_zip_via_central_directory(zip_bytes) {
+        report(0.0);
+        let scan = match scan_zip_via_central_directory(zip_bytes, &mut |p| report(0.02 + 0.40 * p)) {
             Ok(scan) => scan,
             Err(central_err) => {
                 eprintln!("[WACV] central-directory parse failed ({central_err}); falling back to local-header scan");
-                scan_zip_via_local_headers(zip_bytes)?
+                scan_zip_via_local_headers(zip_bytes, &mut |p| report(0.02 + 0.40 * p))?
             }
         };
+        report(0.42);
 
         if scan.chat_text.is_empty() {
             anyhow::bail!("no _chat.txt found in zip");
         }
 
-        for (entry_name, bytes) in &scan.media {
+        let media_total = scan.media.len() as f32;
+        for (i, (entry_name, bytes)) in scan.media.iter().enumerate() {
             let basename = std::path::Path::new(entry_name)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -60,11 +74,116 @@ impl ChatStorage {
             let media_path = chat_media.join(basename);
             fs::write(&media_path, bytes)
                 .context(format!("failed to write media file: {}", entry_name))?;
+            if media_total > 0.0 {
+                report(0.42 + 0.30 * (i + 1) as f32 / media_total);
+            }
         }
+        report(0.72);
 
         let messages = parse_chat(&scan.chat_text);
         let chat = Chat::new(chat_name.clone(), messages);
+        report(0.92);
         self.save_chat(&chat)?;
+        report(1.0);
+
+Ok(chat_name)
+    }
+
+    /// Import a chat directly from a zip on disk, streaming every media file
+    /// out of the archive with `io::copy`. The archive itself is only read
+    /// through a `File`, so RAM stays O(largest entry) even for multi-GB
+    /// exports (the phone OOM'd holding a 5.2 GB archive + decompressed media).
+    pub fn import_chat_file_with_progress<F: FnMut(f32)>(
+        &self,
+        zip_path: &std::path::Path,
+        filename: &str,
+        report: &mut F,
+    ) -> Result<String> {
+        let chat_name = chat_name_from_filename(filename);
+        let chat_media = self.media_dir.join(&chat_name);
+        fs::create_dir_all(&chat_media).context("failed to create chat media dir")?;
+
+        report(0.0);
+        report(0.0);
+        let mut file = fs::File::open(zip_path).context("failed to open zip file")?;
+
+        // Phase 1+2: scan the zip and stream every entry to disk. Prefer the
+        // strict central directory; some very large WhatsApp exports have an
+        // incomplete/corrupt one, so fall back to
+        // walking the local file headers directly. Both paths stream media
+        // with `io::copy`, so RAM stays O(largest entry).
+        let mut chat_text = String::new();
+        let mut media_indices = Vec::new();
+        match zip::ZipArchive::new(&mut file) {
+            Ok(mut archive) => {
+                // Phase 1: scan the central directory (0.00..=0.42). We only
+                // learn the chat text and the list of media entry indices here;
+                // entry bodies stay on disk until phase 2 streams each one out.
+                let total = archive.len();
+                for i in 0..archive.len() {
+                    if total > 0 {
+                        report(0.02 + 0.40 * (i as f32 / total as f32));
+                    }
+                    let mut entry = archive
+                        .by_index(i)
+                        .context("failed to read zip entry")?;
+                    // WhatsApp writes UTF-8 entry names without the ZIP UTF-8
+                    // flag, so decode the raw bytes instead of trusting `name()`.
+                    let entry_name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+                    if entry_name == "_chat.txt" {
+                        entry
+                            .read_to_string(&mut chat_text)
+                            .context("failed to read _chat.txt")?;
+                    } else if !entry_name.starts_with('.') && !entry_name.ends_with('/') {
+                        media_indices.push(i);
+                    }
+                }
+                report(0.42);
+
+                // Phase 2: stream each media entry out (0.42..=0.72).
+                let media_total = media_indices.len() as f32;
+                for (n, idx) in media_indices.iter().enumerate() {
+                    let mut entry = archive
+                        .by_index(*idx)
+                        .context("failed to read zip entry")?;
+                    let entry_name = String::from_utf8_lossy(entry.name_raw()).into_owned();
+                    let basename = std::path::Path::new(&entry_name)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&entry_name);
+                    let media_path = chat_media.join(basename);
+                    let mut out = fs::File::create(&media_path)
+                        .context(format!("failed to write media file: {entry_name}"))?;
+                    io::copy(&mut entry, &mut out)
+                        .context(format!("failed to extract media file: {entry_name}"))?;
+                    if media_total > 0.0 {
+                        report(0.42 + 0.30 * (n + 1) as f32 / media_total);
+                    }
+                }
+                report(0.72);
+            }
+            Err(central_err) => {
+                eprintln!(
+                    "[WACV] central-directory parse failed ({central_err}); falling back to local-header scan"
+                );
+                // The fallback streams each entry to disk itself, so there is
+                // no separate media phase: progress goes 0.02..=0.42 during
+                // the walk, then jumps straight to parsing (0.72).
+                chat_text = import_file_via_local_headers(&mut file, &chat_media, &mut |p| {
+                    report(0.02 + 0.40 * p)
+                })?;
+                report(0.72);
+            }
+        }
+        if chat_text.is_empty() {
+            anyhow::bail!("no _chat.txt found in zip");
+        }
+
+        let messages = parse_chat(&chat_text);
+        let chat = Chat::new(chat_name.clone(), messages);
+        report(0.92);
+        self.save_chat(&chat)?;
+        report(1.0);
 
         Ok(chat_name)
     }
@@ -193,8 +312,195 @@ impl ChatStorage {
     }
 }
 
+/// Fallback importer for archives whose central directory is incomplete or
+/// corrupt (some very large WhatsApp exports): walk the
+/// zip's local file headers directly in the file, inflating each entry with a
+/// self-terminating deflate stream. Media is streamed straight to disk, so
+/// RAM stays bounded regardless of the archive size.
+fn import_file_via_local_headers(
+    file: &mut fs::File,
+    chat_media: &std::path::Path,
+    report: &mut dyn FnMut(f32),
+) -> Result<String> {
+    use std::io::{Seek, SeekFrom};
+
+    let total_bytes = file.metadata().context("zip metadata")?.len();
+    let mut chat_text = String::new();
+    let mut pos: u64 = 0;
+    let mut entries = 0usize;
+
+    while pos + 30 <= total_bytes {
+        file.seek(SeekFrom::Start(pos))
+            .map_err(|e| anyhow::anyhow!("seek: {e}"))?;
+        let mut hdr = [0u8; 30];
+        if file.read_exact(&mut hdr).is_err() {
+            break;
+        }
+
+        // Local file header signature: PK\x03\x04
+        if hdr[..4] != [0x50, 0x4b, 0x03, 0x04] {
+            // Misaligned (truncated deflate stream, data descriptor, or false
+            // signature inside media data): resync on the next local header.
+            match snoop_next_local_header(file, pos + 1, total_bytes)? {
+                Some(next) => {
+                    pos = next;
+                    continue;
+                }
+                None => break,
+            }
+        }
+
+        let flags = u16::from_le_bytes([hdr[6], hdr[7]]);
+        let method = u16::from_le_bytes([hdr[8], hdr[9]]);
+        let comp_size = u32::from_le_bytes([hdr[18], hdr[19], hdr[20], hdr[21]]) as u64;
+        let name_len = u16::from_le_bytes([hdr[26], hdr[27]]) as usize;
+        let extra_len = u16::from_le_bytes([hdr[28], hdr[29]]) as usize;
+
+        let name_start = pos + 30;
+        let data_start = name_start + name_len as u64 + extra_len as u64;
+        if data_start >= total_bytes {
+            // Bogus header (false PK\x03\x04 inside media data): resync.
+            pos += 4;
+            continue;
+        }
+
+        let mut name_buf = vec![0u8; name_len];
+        file.seek(SeekFrom::Start(name_start))
+            .map_err(|e| anyhow::anyhow!("seek name: {e}"))?;
+        if file.read_exact(&mut name_buf).is_err() {
+            pos += 4;
+            continue;
+        }
+        let name = String::from_utf8_lossy(&name_buf).into_owned();
+        if !plausible_zip_name(&name) {
+            pos += 4;
+            continue;
+        }
+
+        file.seek(SeekFrom::Start(data_start))
+            .map_err(|e| anyhow::anyhow!("seek data: {e}"))?;
+
+        // The local header's compressed-size field is unreliable for streaming
+        // entries (data-descriptor mode writes 0), so inflate each stream until
+        // it self-terminates and measure the real consumed length via total_in.
+        let mut consumed: u64 = 0;
+        let mut decode_err: Option<anyhow::Error> = None;
+        if method == 0 {
+            // Stored (uncompressed) entry: copy `comp_size` bytes as-is.
+            if name == "_chat.txt" {
+                let mut payload = vec![0u8; comp_size as usize];
+                match file.read_exact(&mut payload) {
+                    Ok(()) => {
+                        consumed = payload.len() as u64;
+                        chat_text = String::from_utf8_lossy(&payload).into_owned();
+                    }
+                    Err(e) => decode_err = Some(e.into()),
+                }
+            } else if !name.starts_with('.') {
+                let basename = std::path::Path::new(&name)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&name);
+                let media_path = chat_media.join(basename);
+                match fs::File::create(&media_path) {
+                    Ok(mut out) => match std::io::copy(&mut file.take(comp_size), &mut out) {
+                        Ok(n) => consumed = n,
+                        Err(e) => decode_err = Some(e.into()),
+                    },
+                    Err(e) => decode_err = Some(e.into()),
+                }
+            }
+        } else if method == 8 {
+            // Deflate entry: stream the self-terminating stream.
+            if name == "_chat.txt" {
+                let mut text = String::new();
+                let mut dec = flate2::read::DeflateDecoder::new(&mut *file);
+                match dec.read_to_string(&mut text) {
+                    Ok(_) => {
+                        consumed = dec.total_in() as u64;
+                        chat_text = text;
+                    }
+                    Err(e) => decode_err = Some(anyhow::anyhow!("deflate _chat.txt: {e}")),
+                }
+            } else if !name.starts_with('.') {
+                let basename = std::path::Path::new(&name)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&name);
+                let media_path = chat_media.join(basename);
+                match fs::File::create(&media_path) {
+                    Ok(mut out) => {
+                        let mut dec = flate2::read::DeflateDecoder::new(&mut *file);
+                        match std::io::copy(&mut dec, &mut out) {
+                            Ok(n) => consumed = n,
+                            Err(e) => {
+                                decode_err = Some(anyhow::anyhow!("extract media {basename}: {e}"))
+                            }
+                        }
+                    }
+                    Err(e) => decode_err = Some(e.into()),
+                }
+            }
+        } else {
+            // Unsupported compression: skip forward.
+            pos += 4;
+            continue;
+        }
+
+        if decode_err.is_some() {
+            // Corrupt or unsupported entry: skip it and keep scanning.
+            pos = data_start + 1;
+            continue;
+        }
+
+        pos = data_start + consumed;
+
+        // Streaming entries (flag bit 3) append a data descriptor after the
+        // compressed data: signature + crc + sizes.
+        if flags & 0x0008 != 0 && pos + 4 <= total_bytes {
+            file.seek(SeekFrom::Start(pos)).ok();
+            let mut d = [0u8; 4];
+            if file.read(&mut d).map(|n| n == 4).unwrap_or(false)
+                && d == [0x50, 0x4b, 0x07, 0x08]
+            {
+                pos += 16; // signature + crc(4) + compressed size(4) + uncompressed size(4)
+            }
+        }
+
+        entries += 1;
+        // No known total in this path; approximate by reported entries.
+        report((entries as f32 / 100.0).min(0.95));
+    }
+
+    if chat_text.is_empty() {
+        anyhow::bail!("no _chat.txt found via local-header scan");
+    }
+    Ok(chat_text)
+}
+
+/// Scan the file for the next `PK\x03\x04` local-header signature at or after
+/// `from`, reading bounded chunks so a multi-gigabyte scan never loads the
+/// whole archive into RAM.
+fn snoop_next_local_header(file: &mut fs::File, from: u64, total_bytes: u64) -> Result<Option<u64>> {
+    use std::io::{Seek, SeekFrom};
+    let mut chunk = vec![0u8; 1 << 16];
+    let mut pos = from;
+    while pos < total_bytes {
+        file.seek(SeekFrom::Start(pos)).ok();
+        let n = std::io::Read::read(&mut *file, &mut chunk)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if let Some(off) = find_next_local_header(&chunk[..n], 0) {
+            return Ok(Some(pos + off as u64));
+        }
+        pos += n as u64;
+    }
+    Ok(None)
+}
+
 /// Scan a zip using its central directory (strict).
-fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
+fn scan_zip_via_central_directory(zip_bytes: &[u8], progress: &mut dyn FnMut(f32)) -> Result<ZipScan> {
     let cursor = io::Cursor::new(zip_bytes);
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| anyhow::anyhow!("invalid zip: {}", e))?;
@@ -203,7 +509,11 @@ fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
         chat_text: String::new(),
         media: Vec::new(),
     };
+    let total = archive.len();
     for i in 0..archive.len() {
+        if total > 0 {
+            progress(i as f32 / total as f32);
+        }
         let mut file = archive.by_index(i).context("failed to read zip entry")?;
         // WhatsApp writes UTF-8 entry names without the ZIP UTF-8 flag (bit 11).
         // The `zip` crate then falls back to CP437 and mangles non-ASCII names,
@@ -225,12 +535,13 @@ fn scan_zip_via_central_directory(zip_bytes: &[u8]) -> Result<ZipScan> {
 /// Scan a zip by walking its local file headers. Tolerates malformed central
 /// directories (incomplete WhatsApp exports): sizes are ignored and each entry
 /// is inflated as a self-terminating deflate stream.
-fn scan_zip_via_local_headers(zip_bytes: &[u8]) -> Result<ZipScan> {
+fn scan_zip_via_local_headers(zip_bytes: &[u8], progress: &mut dyn FnMut(f32)) -> Result<ZipScan> {
     let mut scan = ZipScan {
         chat_text: String::new(),
         media: Vec::new(),
     };
     let mut pos = 0usize;
+    let mut entries = 0usize;
 
     while pos + 30 <= zip_bytes.len() {
         // Local file header signature: PK\x03\x04
@@ -289,6 +600,10 @@ fn scan_zip_via_local_headers(zip_bytes: &[u8]) -> Result<ZipScan> {
         {
             pos += 16; // 4-byte signature + crc(4) + compressed size(4) + uncompressed size(4)
         }
+
+        entries += 1;
+        // No known total in this path; approximate by reported entries.
+        progress((entries as f32 / 100.0).min(0.95));
 
         if name == "_chat.txt" {
             scan.chat_text = String::from_utf8_lossy(&decoded).into_owned();
@@ -368,7 +683,8 @@ mod tests {
     #[test]
     fn central_directory_scan_handles_valid_zip() {
         let zip = make_zip();
-        let scan = scan_zip_via_central_directory(&zip).expect("valid zip should parse");
+        let scan =
+            scan_zip_via_central_directory(&zip, &mut |_| {}).expect("valid zip should parse");
         assert!(scan.chat_text.contains("Alex: Hi"));
         assert_eq!(scan.media.len(), 1);
         assert_eq!(scan.media[0].0, "00000001-pic.jpg");
@@ -387,7 +703,7 @@ mod tests {
             .expect("CD marker");
         let truncated = &zip[..cd_pos];
 
-        let scan = scan_zip_via_local_headers(truncated).expect("scan should recover");
+        let scan = scan_zip_via_local_headers(truncated, &mut |_| {}).expect("scan should recover");
         assert!(scan.chat_text.contains("Alex: Hi"));
         assert_eq!(scan.media.len(), 1);
         assert_eq!(scan.media[0].1, b"fakejpegdata");
@@ -433,7 +749,8 @@ mod tests {
     fn central_directory_scan_keeps_utf8_names_without_flag() {
         let zip = make_whatsapp_style_zip();
         // The correct, UTF-8-decoded media name must survive the scan.
-        let scan = scan_zip_via_central_directory(&zip).expect("valid zip should parse");
+        let scan =
+            scan_zip_via_central_directory(&zip, &mut |_| {}).expect("valid zip should parse");
         assert!(scan.chat_text.contains("Alex: Hi"));
         assert_eq!(scan.media.len(), 1);
         assert_eq!(scan.media[0].0, "00000127-Allergen-U\u{0308}bersicht.pdf");
@@ -442,7 +759,7 @@ mod tests {
     #[test]
     fn local_headers_scan_keeps_utf8_names_without_flag() {
         let zip = make_whatsapp_style_zip();
-        let scan = scan_zip_via_local_headers(&zip).expect("scan should recover");
+        let scan = scan_zip_via_local_headers(&zip, &mut |_| {}).expect("scan should recover");
         assert_eq!(scan.media[0].0, "00000127-Allergen-U\u{0308}bersicht.pdf");
     }
 }

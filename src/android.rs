@@ -59,11 +59,15 @@ pub fn is_initialised() -> bool {
 }
 
 /// Launch the system file picker (multi-select) for application/zip and return
-/// the chosen files as (filename, bytes).
+/// the chosen files as (filename, content-URI).
 ///
 /// Spawns the intent on the UI thread via `wry::dispatch()`, then polls for
 /// the content-URI(s) returned through `MainActivity.onActivityResult()`.
-pub fn pick_zip_files() -> Result<Vec<(String, Vec<u8>)>, String> {
+///
+/// Bytes are NOT read here: the caller reads each URI individually from a
+/// worker thread to keep the main thread responsive and avoid buffering all
+/// selected archives in memory at once.
+pub fn pick_zip_files() -> Result<Vec<(String, String)>, String> {
     launch_file_picker_impl()?;
     let raw = poll_picker_result()?;
     // URIs are joined with \u0001 by the Kotlin side (see FilePickerHelper).
@@ -74,12 +78,11 @@ pub fn pick_zip_files() -> Result<Vec<(String, Vec<u8>)>, String> {
 
     let mut files = Vec::with_capacity(uris.len());
     for uri in uris {
-        let bytes = read_uri_content(uri)?;
         // Best-effort filename: query OpenableColumns.DISPLAY_NAME (the URI's
         // last segment is often a numeric document id or an encoded path).
         let fname = display_name_for_uri(uri);
-        eprintln!("[WACV] JNI picker got file: {fname} ({} bytes)", bytes.len());
-        files.push((fname, bytes));
+        eprintln!("[WACV] JNI picker got file: {fname}");
+        files.push((fname, uri.to_string()));
     }
     Ok(files)
 }
@@ -245,20 +248,46 @@ fn poll_picker_result() -> Result<String, String> {
     Err("Timed out waiting for file picker result".to_string())
 }
 
-/// Read all bytes from a `content://` URI through Android's ContentResolver.
-fn read_uri_content(uri_str: &str) -> Result<Vec<u8>, String> {
-    eprintln!("[WACV] read_uri_content: {uri_str}");
+
+
+/// Best-effort cached filename for a staged import: guaranteed-unique file in
+/// the app's cache dir so multi-GB archives never live in RAM.
+pub fn temp_import_path(chat_name: &str) -> std::path::PathBuf {
+    let base = android_data_dir()
+        .cloned()
+        .unwrap_or_else(|| std::path::PathBuf::from("/data/user/0/com.example.Wacv/files"));
+    // One staging file at a time; a monotonically increasing suffix keeps
+    // consecutive imports from colliding while the previous temp is removed.
+    let sanitized: String = chat_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    base.join("wacv").join("tmp").join(format!("{sanitized}-{stamp}.zip"))
+}
+
+/// Stream a `content://` URI into the given destination file in 64 KiB
+/// chunks. Memory use stays O(64 KiB) regardless of the archive size, so the
+/// phone is never forced to hold a multi-gigabyte zip in RAM (that is what
+/// OOM'd the import thread for a very large chat export).
+pub fn copy_uri_content_to_file(
+    uri_str: &str,
+    dest: &std::path::Path,
+    report: &mut dyn FnMut(f32),
+) -> Result<(), String> {
+    eprintln!("[WACV] copy_uri_content_to_file: {uri_str} → {dest:?}");
     let jvm = JAVA_VM.get().ok_or("JAVA_VM not init")?;
     let mut guard = jvm
         .attach_current_thread_as_daemon()
         .map_err(|e| format!("attach: {e}"))?;
 
     guard
-        .with_local_frame::<_, Vec<u8>, jni::errors::Error>(32, |env| {
+        .with_local_frame::<_, (), anyhow::Error>(32, |env| {
             let activity = ACTIVITY.get().expect("ACTIVITY not init");
 
-
-            // Parse URI string -> android.net.Uri
             let uri_class = env.find_class("android/net/Uri").unwrap();
             let uri_jstr = env.new_string(uri_str).unwrap();
             let uri_obj = env
@@ -272,7 +301,6 @@ fn read_uri_content(uri_str: &str) -> Result<Vec<u8>, String> {
                 .l()
                 .unwrap();
 
-            // ContentResolver
             let resolver = env
                 .call_method(
                     activity.as_obj(),
@@ -284,7 +312,8 @@ fn read_uri_content(uri_str: &str) -> Result<Vec<u8>, String> {
                 .l()
                 .unwrap();
 
-            // Open InputStream
+            let total = uri_size(env, &resolver, &uri_obj).unwrap_or(-1);
+
             let stream = env
                 .call_method(
                     &resolver,
@@ -296,13 +325,14 @@ fn read_uri_content(uri_str: &str) -> Result<Vec<u8>, String> {
                 .l()
                 .unwrap();
 
-            // Read all bytes via ByteArrayOutputStream
-            let baos_class = env.find_class("java/io/ByteArrayOutputStream").unwrap();
-            let baos = env
-                .new_object(&baos_class, "()V", &[])
-                .unwrap();
-            let buf = env.new_byte_array(4096).unwrap();
+            std::fs::create_dir_all(dest.parent().expect("dest has parent dir"))
+                .map_err(anyhow::Error::from)?;
+            let mut out = std::fs::File::create(dest).map_err(anyhow::Error::from)?;
 
+            report(0.0);
+            let chunk_size = 64 * 1024;
+            let buf = env.new_byte_array(chunk_size).unwrap();
+            let mut downloaded: i64 = 0;
             loop {
                 let nread = env
                     .call_method(&stream, "read", "([B)I", &[(&buf).into()])
@@ -312,30 +342,59 @@ fn read_uri_content(uri_str: &str) -> Result<Vec<u8>, String> {
                 if nread < 0 {
                     break;
                 }
-                env.call_method(
-                    &baos,
-                    "write",
-                    "([BII)V",
-                    &[(&buf).into(), 0.into(), nread.into()],
-                )
-                .unwrap();
+                let mut chunk = vec![0i8; nread as usize];
+                env.get_byte_array_region(&buf, 0, &mut chunk).unwrap();
+                std::io::Write::write_all(&mut out, &chunk.iter().map(|&b| b as u8).collect::<Vec<u8>>())
+                    .map_err(anyhow::Error::from)?;
+                downloaded += nread as i64;
+                if total > 0 {
+                    report((downloaded as f32 / total as f32).min(1.0));
+                }
             }
-
-            let result = env
-                .call_method(&baos, "toByteArray", "()[B", &[])
-                .unwrap()
-                .l()
-                .unwrap();
-            let jba: jni::objects::JByteArray = result.into();
-            let rust_bytes = env.convert_byte_array(&jba).unwrap();
-
-            // Close
             let _ = env.call_method(&stream, "close", "()V", &[]);
-
-            eprintln!("[WACV] read_uri_content: {} bytes", rust_bytes.len());
-            Ok(rust_bytes)
+            report(1.0);
+            Ok(())
         })
-        .map_err(|e| format!("read_uri_content failed: {e}"))
+        .map_err(|e| format!("copy_uri_content_to_file failed: {e}"))
+}
+
+/// Query `OpenableColumns.SIZE` for a content URI; -1 when unavailable.
+fn uri_size(
+    env: &mut jni::JNIEnv,
+    resolver: &JObject,
+    uri: &JObject,
+) -> jni::errors::Result<i64> {
+    let string_class = env.find_class("java/lang/String")?;
+    let projection = env.new_object_array(1, &string_class, JObject::null())?;
+    let col = env.new_string("_size")?;  // OpenableColumns.SIZE
+    env.set_object_array_element(&projection, 0, &col)?;
+    let null = JObject::null();
+    let cursor = env
+        .call_method(
+            resolver,
+            "query",
+            "(Landroid/net/Uri;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+            &[(&uri).into(), (&projection).into(), (&null).into(), (&null).into(), (&null).into()],
+        )?
+        .l()?;
+    if cursor.is_null() {
+        return Ok(-1);
+    }
+    let moved = env.call_method(&cursor, "moveToFirst", "()Z", &[])?.z()?;
+    let mut size = -1i64;
+    if moved {
+        let idx = env
+            .call_method(&cursor, "getColumnIndex", "(Ljava/lang/String;)I", &[(&col).into()])?
+            .i()?;
+        if idx >= 0 {
+            let is_null = env.call_method(&cursor, "isNull", "(I)Z", &[idx.into()])?.z()?;
+            if !is_null {
+                size = env.call_method(&cursor, "getLong", "(I)J", &[idx.into()])?.j()?;
+            }
+        }
+    }
+    let _ = env.call_method(&cursor, "close", "()V", &[]);
+    Ok(size)
 }
 
 /// Best-effort original filename for a `content://` URI.
@@ -374,7 +433,7 @@ fn display_name_for_uri(uri: &str) -> String {
                 // query(uri, ["display_name"], null, null, null)
                 let string_class = env.find_class("java/lang/String")?;
                 let projection = env.new_object_array(1, &string_class, JObject::null())?;
-                let col = env.new_string("display_name")?;
+                let col = env.new_string("_display_name")?;  // OpenableColumns.DISPLAY_NAME
                 env.set_object_array_element(&projection, 0, &col)?;
                 let null = JObject::null();
                 let cursor = env

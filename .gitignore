@@ -16,3 +16,5 @@ examples
 /android/build/
 /android/app/build/
 /android/.kotlin/
+# Copied in by the nix build (cargo ndk -> gradle) into the source tree
+/android/app/src/main/jniLibs/
